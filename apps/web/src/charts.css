@@ -1,0 +1,115 @@
+/* Shine chart widgets. Additive; does not touch styles.css (design agent's file). */
+
+.chart-card {
+  display: grid;
+  gap: 26px;
+}
+
+/* Bar chart */
+.bar-chart {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.bar-chart .bar-base {
+  stroke: #ececf0;
+  stroke-width: 2;
+}
+
+.bar-chart .bar {
+  fill: var(--accent, #1677ff);
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: shine-bar-grow 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  filter: drop-shadow(0 8px 16px color-mix(in srgb, var(--accent, #1677ff) 26%, transparent));
+}
+
+@keyframes shine-bar-grow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+/* Trend line: gradient fill + draw-on */
+.mini-chart .trend-area {
+  stroke: none;
+}
+
+.mini-chart .trend-line {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: shine-draw 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 0.05s forwards;
+}
+
+@keyframes shine-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Donut chart */
+.donut-wrap {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  align-items: center;
+  gap: 28px;
+}
+
+.donut-chart {
+  width: 200px;
+  height: 200px;
+}
+
+.donut-chart .donut-seg {
+  animation: shine-seg-in 0.5s ease both;
+}
+
+@keyframes shine-seg-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.donut-chart .donut-total {
+  font: 650 38px Inter, system-ui, sans-serif;
+  fill: #111114;
+}
+
+.donut-legend {
+  display: grid;
+  gap: 13px;
+  font-size: 15px;
+  color: #33343a;
+}
+
+.donut-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.donut-legend i {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar-chart .bar,
+  .donut-chart .donut-seg {
+    animation: none;
+  }
+  .mini-chart .trend-line {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}

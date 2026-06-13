@@ -18,12 +18,11 @@ import {
   type WorldState,
 } from "@sig/core";
 import { FabricSurface } from "./FabricSurface";
-import { VoiceSurface } from "./VoiceSurface";
 import { ShineBackground } from "./ShineBackground";
 import { Scrubber } from "./Scrubber";
 import { backgroundChoices, users, type BgPalette } from "./users";
 
-type RendererKind = "dom" | "fabric" | "voice";
+type RendererKind = "dom" | "fabric";
 
 export function App() {
   return (
@@ -128,7 +127,7 @@ function SignalApp() {
       const el = event.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       event.preventDefault();
-      const order: RendererKind[] = ["dom", "fabric", "voice"];
+      const order: RendererKind[] = ["dom", "fabric"];
       setRendererMode((current) => {
         return order[(order.indexOf(current) + 1) % order.length];
       });
@@ -680,14 +679,6 @@ function SurfaceSwitch({
     return <FabricSurface surface={surface} scene={scene} />;
   }
 
-  if (renderer === "voice") {
-    return (
-      <VoiceSurface surface={surface}>
-        <DomSurface world={world} selectedTx={selectedTx} surface={surface} />
-      </VoiceSurface>
-    );
-  }
-
   return <DomSurface world={world} selectedTx={selectedTx} surface={surface} />;
 }
 
@@ -804,7 +795,7 @@ function stateCacheKey(world: WorldId, atTx: number | null) {
 }
 
 function rendererLabel(renderer: RendererKind) {
-  return renderer === "fabric" ? "Cloth" : renderer === "voice" ? "Voice" : "DOM";
+  return renderer === "fabric" ? "Cloth" : "DOM";
 }
 
 function userIdFromLocation() {

@@ -7,12 +7,16 @@ import type { WorldId } from "@sig/core";
  * deliberately pale and slow — they read as "lit from within", never busy.
  */
 export type BgPalette = {
-  /** Four pale RGB triplets (0..1) the shader blends between. */
+  /** Four RGB triplets (0..1) the gradient glows blend between. */
   colors: [[number, number, number], [number, number, number], [number, number, number], [number, number, number]];
   /** Drift speed — tiny. The whole point is "hardly moving". */
   speed: number;
   /** How far the result is lifted toward white (0..1). Higher = calmer. */
   lift: number;
+  /** Canvas base colour the glows sit on. Defaults to white. Dark = Luma look. */
+  base?: [number, number, number];
+  /** Dark theme — flips chrome text to light and intensifies the glows. */
+  dark?: boolean;
 };
 
 export type ShineUser = {
@@ -79,6 +83,57 @@ export const backgroundChoices: BackgroundChoice[] = [
       ],
       speed: 0.016,
       lift: 0.38,
+    },
+  },
+  {
+    id: "aurora",
+    label: "Aurora",
+    swatch: "linear-gradient(140deg, #3a2f7a, #6d3bd1, #2b6f7d)",
+    bg: {
+      dark: true,
+      base: [0.043, 0.043, 0.078],
+      colors: [
+        [0.36, 0.3, 0.95],
+        [0.6, 0.27, 0.85],
+        [0.16, 0.62, 0.7],
+        [0.9, 0.32, 0.62],
+      ],
+      speed: 0.022,
+      lift: 0.0,
+    },
+  },
+  {
+    id: "mocha",
+    label: "Mocha",
+    swatch: "linear-gradient(140deg, #2a1d1a, #6e3f2f, #b9603f)",
+    bg: {
+      dark: true,
+      base: [0.07, 0.052, 0.047],
+      colors: [
+        [0.85, 0.45, 0.26],
+        [0.92, 0.33, 0.4],
+        [0.6, 0.34, 0.7],
+        [0.95, 0.62, 0.3],
+      ],
+      speed: 0.018,
+      lift: 0.0,
+    },
+  },
+  {
+    id: "noir",
+    label: "Noir",
+    swatch: "linear-gradient(140deg, #101014, #1b1d2a, #232634)",
+    bg: {
+      dark: true,
+      base: [0.035, 0.037, 0.05],
+      colors: [
+        [0.32, 0.36, 0.6],
+        [0.24, 0.5, 0.62],
+        [0.4, 0.3, 0.55],
+        [0.2, 0.24, 0.4],
+      ],
+      speed: 0.014,
+      lift: 0.0,
     },
   },
 ];

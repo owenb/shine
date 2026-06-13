@@ -84,6 +84,7 @@ export type SignalSurfaceData = {
     delta: string;
   };
   trend: TrendDatum[];
+  split: { label: string; value: number }[];
   rows: TableRow[];
   sources: Source[];
   memoryNote: string;
@@ -91,7 +92,7 @@ export type SignalSurfaceData = {
   grounded?: Grounding;
 };
 
-export type SurfaceKind = "metric" | "trend" | "table" | "sources";
+export type SurfaceKind = "metric" | "trend" | "table" | "sources" | "bar" | "donut";
 export type ComponentVariant = "crystal" | "ledger" | "brief";
 
 export type SignalSurface = {
@@ -154,6 +155,23 @@ export type SceneNode =
       id: string;
       points: Array<{ x: number; y: number }>;
       accent: string;
+    }
+  | {
+      type: "bars";
+      id: string;
+      accent: string;
+      data: Array<{ label: string; value: number }>;
+      box: { x: number; y: number; width: number; height: number };
+    }
+  | {
+      type: "donut";
+      id: string;
+      accent: string;
+      segments: Array<{ label: string; value: number }>;
+      cx: number;
+      cy: number;
+      radius: number;
+      thickness: number;
     };
 
 export type SceneHotspot = {
@@ -201,7 +219,7 @@ export type TimelineItem = {
 export type WorldPreferences = {
   presentation: "visual" | "table" | "brief";
   tone: "calm" | "sharp";
-  renderer: "dom" | "fabric" | "voice";
+  renderer: "dom" | "fabric";
   component: ComponentVariant;
 };
 
@@ -298,17 +316,24 @@ export function composeSurface(
   surfaceId = SURFACE_ID,
 ): SignalSurface {
   const intent = signal.type === "renderWidget" ? signal.intent : "summary";
+  const promptLc = signal.prompt.toLowerCase();
+  const wantsDonut = /(donut|doughnut|\bmix\b|\bshare\b|\bsplit\b|distribution|proportion|\bpie\b)/.test(promptLc);
+  const wantsBar = /(bar chart|\bbars?\b|breakdown|by segment|by region|by category)/.test(promptLc);
   const useTable =
     preferences.presentation === "table" ||
     (world === "world-b" && preferences.presentation !== "visual");
   const kind: SurfaceKind =
     intent === "competitors" || intent === "research"
       ? "sources"
-      : useTable
-        ? "table"
-        : intent === "summary" || preferences.presentation === "brief"
-          ? "metric"
-          : "trend";
+      : wantsDonut
+        ? "donut"
+        : wantsBar
+          ? "bar"
+          : useTable
+            ? "table"
+            : intent === "summary" || preferences.presentation === "brief"
+              ? "metric"
+              : "trend";
 
   const data = dataForIntent(intent, preferences, tx, grounding);
   const rootComponent =
@@ -318,7 +343,11 @@ export function composeSurface(
         ? "source-card"
         : kind === "metric"
           ? "metric-card"
-          : "trend-card";
+          : kind === "bar"
+            ? "bar-chart"
+            : kind === "donut"
+              ? "donut-chart"
+              : "trend-card";
 
   const ops: A2UIOp[] = [
     {
@@ -353,6 +382,20 @@ export function composeSurface(
             title: { path: "/title" },
             subtitle: { path: "/subtitle" },
             data: { path: "/trend" },
+          },
+          {
+            id: "bar-chart",
+            component: "BarChart",
+            title: { path: "/title" },
+            subtitle: { path: "/subtitle" },
+            data: { path: "/trend" },
+          },
+          {
+            id: "donut-chart",
+            component: "DonutChart",
+            title: { path: "/title" },
+            subtitle: { path: "/subtitle" },
+            segments: { path: "/split" },
           },
           {
             id: "ledger-table",
@@ -523,6 +566,41 @@ export function composeScene(surface: SignalSurface, preferences: WorldPreferenc
   } else if (surface.kind === "trend") {
     const points = chartPoints(surface.data.trend, 88, 280, 744, 140);
     nodes.push({ type: "chart", id: "trend", points, accent });
+  } else if (surface.kind === "bar") {
+    nodes.push({
+      type: "bars",
+      id: "bars",
+      accent,
+      data: surface.data.trend,
+      box: { x: 88, y: 252, width: 744, height: 182 },
+    });
+  } else if (surface.kind === "donut") {
+    nodes.push({
+      type: "donut",
+      id: "donut",
+      accent,
+      segments: surface.data.split,
+      cx: 236,
+      cy: 350,
+      radius: 96,
+      thickness: 34,
+    });
+    surface.data.split.slice(0, 4).forEach((seg, index) => {
+      const total = surface.data.split.reduce((sum, item) => sum + item.value, 0) || 1;
+      nodes.push({
+        type: "text",
+        id: `legend-${index}`,
+        text: `${seg.label}   ${Math.round((seg.value / total) * 100)}%`,
+        x: 432,
+        y: 312 + index * 42,
+        maxWidth: 380,
+        lineHeight: 30,
+        fontSize: 22,
+        fontWeight: 500,
+        color: "#33343a",
+        maxLines: 1,
+      });
+    });
   } else {
     nodes.push({
       type: "metric",
@@ -585,6 +663,7 @@ function dataForIntent(
         { label: "Fri", value: 41 },
       ],
       rows,
+      split: [],
       sources: groundedSources,
       memoryNote: `Rendered ${suffix}`,
       txLabel: `tx ${String(tx).padStart(3, "0")}`,
@@ -596,6 +675,11 @@ function dataForIntent(
     return {
       title: "Pipeline velocity",
       subtitle: "Same facts, personalized surface.",
+      split: [
+        { label: "Enterprise", value: 50 },
+        { label: "Mid-market", value: 29 },
+        { label: "Startup", value: 21 },
+      ],
       stat: { label: "Qualified", value: "$2.8M", delta: "+14%" },
       trend: [
         { label: "Jan", value: 21 },
@@ -620,6 +704,11 @@ function dataForIntent(
     return {
       title: "Operating summary",
       subtitle: "The agent compressed the current world into one surface.",
+      split: [
+        { label: "Product", value: 42 },
+        { label: "Revenue", value: 36 },
+        { label: "Support", value: 22 },
+      ],
       stat: { label: "Health", value: "92", delta: "+5" },
       trend: [
         { label: "1", value: 62 },
@@ -642,6 +731,11 @@ function dataForIntent(
   return {
     title: "Revenue overview",
     subtitle: "A live widget the agent composed into A2UI.",
+    split: [
+      { label: "New", value: 54 },
+      { label: "Expansion", value: 31 },
+      { label: "Renewal", value: 15 },
+    ],
     stat: { label: "ARR", value: "$12.4M", delta: "+18%" },
     trend: [
       { label: "Jan", value: 42 },

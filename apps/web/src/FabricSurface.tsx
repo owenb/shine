@@ -443,6 +443,58 @@ function drawNode(ctx: CanvasRenderingContext2D, node: SceneNode) {
       else ctx.lineTo(point.x, point.y);
     });
     ctx.stroke();
+    return;
+  }
+
+  if (node.type === "bars") {
+    const { box, data } = node;
+    const max = Math.max(...data.map((d) => d.value), 1);
+    const gap = 16;
+    const n = Math.max(data.length, 1);
+    const barWidth = (box.width - gap * (n - 1)) / n;
+    ctx.strokeStyle = "#ececf0";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(box.x, box.y + box.height);
+    ctx.lineTo(box.x + box.width, box.y + box.height);
+    ctx.stroke();
+    ctx.fillStyle = node.accent;
+    data.forEach((datum, index) => {
+      const barHeight = (datum.value / max) * box.height;
+      const x = box.x + index * (barWidth + gap);
+      const y = box.y + box.height - barHeight;
+      roundRect(ctx, x, y, barWidth, Math.max(barHeight, 1), 8);
+      ctx.fill();
+    });
+    return;
+  }
+
+  if (node.type === "donut") {
+    const { segments, cx, cy, radius, thickness } = node;
+    const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
+    const ramp = ["#1677ff", "#1db36b", "#f5a524", "#9b8afb", "#ff6b8a"];
+    ctx.lineWidth = thickness;
+    ctx.strokeStyle = "#ececf0";
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    let start = -Math.PI / 2;
+    segments.forEach((seg, index) => {
+      const angle = (seg.value / total) * Math.PI * 2;
+      ctx.strokeStyle = ramp[index % ramp.length];
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, start, start + angle);
+      ctx.stroke();
+      start += angle;
+    });
+    ctx.fillStyle = "#111114";
+    ctx.font = "650 40px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${Math.round(((segments[0]?.value ?? 0) / total) * 100)}%`, cx, cy);
+    ctx.textAlign = "start";
+    ctx.textBaseline = "alphabetic";
+    return;
   }
 }
 

@@ -138,7 +138,6 @@ const redis: ServerRedis = {
 };
 const geminiApiKey = process.env.GEMINI_API_KEY;
 const geminiModel = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite";
-const geminiTtsModel = process.env.GEMINI_TTS_MODEL ?? "gemini-3.1-flash-tts-preview";
 const geminiVertexai = true;
 const gemini = geminiApiKey
   ? new GoogleGenAI({ apiKey: geminiApiKey, vertexai: geminiVertexai })
@@ -178,7 +177,6 @@ app.get("/api/health", (c) =>
     gemini: {
       configured: Boolean(gemini),
       model: geminiModel,
-      ttsModel: geminiTtsModel,
       vertexai: geminiVertexai,
     },
     linkup: {
@@ -270,37 +268,6 @@ app.post("/api/layout/delete", async (c) => {
   }
   const state = await applyLayoutDelete(parsed.data);
   return c.json(state);
-});
-
-app.post("/api/tts", async (c) => {
-  const raw = (await c.req.json().catch(() => null)) as
-    | { text?: unknown; voice?: unknown }
-    | null;
-  const text = typeof raw?.text === "string" ? raw.text.trim().slice(0, 1_200) : "";
-  const voiceName = typeof raw?.voice === "string" && raw.voice.trim() ? raw.voice.trim() : "Kore";
-  if (!text) {
-    return c.json({ error: "Missing text" }, 400);
-  }
-
-  try {
-    const audio = await synthesizeVoice(text, voiceName);
-    const body = new Uint8Array(audio);
-    return new Response(body, {
-      headers: {
-        "Content-Type": "audio/wav",
-        "Cache-Control": "private, max-age=3600",
-        "X-Gemini-TTS-Model": geminiTtsModel,
-      },
-    });
-  } catch (error) {
-    return c.json(
-      {
-        error: "Gemini TTS failed",
-        details: error instanceof Error ? error.message : String(error),
-      },
-      502,
-    );
-  }
 });
 
 app.post("/api/reset", async (c) => {
@@ -1233,96 +1200,6 @@ async function resolveGrounding(
     );
     throw error;
   }
-}
-
-async function synthesizeVoice(text: string, voiceName: string): Promise<Buffer> {
-  if (!gemini) {
-    throw new Error("GEMINI_API_KEY is not configured");
-  }
-
-  const input = { text, voiceName, model: geminiTtsModel, vertexai: geminiVertexai };
-  const cached = await getCachedEffect<{
-    wavBase64: string;
-    mimeType: string;
-    sourceMimeType: string;
-  }>("gemini-tts", input);
-  if (cached) {
-    return Buffer.from(cached.output.wavBase64, "base64");
-  }
-
-  const response = await gemini.models.generateContent({
-    model: geminiTtsModel,
-    contents: [{ role: "user", parts: [{ text }] }],
-    config: {
-      responseModalities: ["AUDIO"],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName },
-        },
-      },
-    },
-  });
-  const audioPart = response.candidates?.[0]?.content?.parts?.find(
-    (part) => Boolean(part.inlineData?.data),
-  );
-  const encodedAudio = audioPart?.inlineData?.data;
-  if (!encodedAudio) {
-    throw new Error("Gemini TTS returned no audio data");
-  }
-
-  const sourceMimeType = audioPart.inlineData?.mimeType ?? "audio/l16; rate=24000; channels=1";
-  const pcm = Buffer.from(encodedAudio, "base64");
-  const wav = pcmToWav(pcm, parsePcmAudioMime(sourceMimeType));
-  await cacheEffect(
-    "gemini-tts",
-    input,
-    {
-      mimeType: "audio/wav",
-      sourceMimeType,
-      wavBase64: wav.toString("base64"),
-    },
-    false,
-  );
-  return wav;
-}
-
-function parsePcmAudioMime(mimeType: string) {
-  const rate = Number(/rate=(\d+)/i.exec(mimeType)?.[1] ?? 24000);
-  const channels = Number(/channels=(\d+)/i.exec(mimeType)?.[1] ?? 1);
-  return {
-    sampleRate: Number.isFinite(rate) ? rate : 24000,
-    channels: Number.isFinite(channels) ? channels : 1,
-    sampleWidth: 2,
-  };
-}
-
-function pcmToWav(
-  pcm: Buffer,
-  {
-    sampleRate,
-    channels,
-    sampleWidth,
-  }: { sampleRate: number; channels: number; sampleWidth: number },
-) {
-  const header = Buffer.alloc(44);
-  const byteRate = sampleRate * channels * sampleWidth;
-  const blockAlign = channels * sampleWidth;
-
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + pcm.length, 4);
-  header.write("WAVE", 8);
-  header.write("fmt ", 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(channels, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE(blockAlign, 32);
-  header.writeUInt16LE(sampleWidth * 8, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(pcm.length, 40);
-
-  return Buffer.concat([header, pcm]);
 }
 
 async function getCachedEffect<T>(kind: string, input: object) {
