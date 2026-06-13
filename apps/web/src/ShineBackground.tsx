@@ -16,10 +16,10 @@ export function ShineBackground({ palette }: { palette: BgPalette }) {
       aria-hidden="true"
       style={
         {
-          "--shine-bg-1": colorStop(palette.colors[0], 0.16),
-          "--shine-bg-2": colorStop(palette.colors[1], 0.14),
-          "--shine-bg-3": colorStop(palette.colors[2], 0.12),
-          "--shine-bg-4": colorStop(palette.colors[3], 0.1),
+          "--shine-bg-1": colorStop(palette.colors[0], 0.55),
+          "--shine-bg-2": colorStop(palette.colors[1], 0.48),
+          "--shine-bg-3": colorStop(palette.colors[2], 0.42),
+          "--shine-bg-4": colorStop(palette.colors[3], 0.36),
         } as CSSProperties
       }
     />
