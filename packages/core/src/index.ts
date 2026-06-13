@@ -512,9 +512,9 @@ function dataForIntent(
       : [];
     return {
       title: intent === "competitors" ? "Stripe competitor pulse" : "Research pulse",
-      subtitle:
-        grounding?.answer ??
-        "Live citations unavailable until LINKUP_API_KEY is configured.",
+      subtitle: grounding
+        ? conciseGroundingAnswer(grounding.answer, groundedSources)
+        : "Live citations unavailable until LINKUP_API_KEY is configured.",
       stat: {
         label: "Sources",
         value: String(groundedSources.length),
@@ -603,6 +603,23 @@ function dataForIntent(
     memoryNote: `Rendered ${suffix}`,
     txLabel: `tx ${String(tx).padStart(3, "0")}`,
   };
+}
+
+function conciseGroundingAnswer(answer: string, sources: Source[]) {
+  const labels = sources
+    .map((source) => source.label)
+    .filter(Boolean)
+    .slice(0, 3);
+
+  if (labels.length) {
+    const sourceWord = sources.length === 1 ? "source" : "sources";
+    return `Live LinkUp research from ${sources.length} cited ${sourceWord}: ${labels.join(", ")}.`;
+  }
+
+  const normalized = answer.replace(/\s+/g, " ").trim();
+  return normalized
+    ? `LinkUp returned a live answer without cited sources: ${normalized.slice(0, 160)}`
+    : "LinkUp returned a live answer without cited sources.";
 }
 
 function chartPoints(

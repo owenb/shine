@@ -44,7 +44,14 @@ export const definitions = {
       title: stringOrPath,
       subtitle: stringOrPath,
       sources: z.union([
-        z.array(z.object({ title: z.string(), url: z.string(), label: z.string() })),
+        z.array(
+          z.object({
+            title: z.string(),
+            url: z.string(),
+            label: z.string(),
+            snippet: z.string().optional(),
+          }),
+        ),
         z.object({ path: z.string() }),
       ]),
     }),
@@ -108,26 +115,32 @@ const renderers = {
 
   SourceCard: ({
     props,
-  }: RendererProps<{ title: string; subtitle: string; sources: Source[] }>) => (
-    <div className="source-card">
-      <div className="widget-copy">
-        <h1>{props.title}</h1>
-        <p>{props.subtitle}</p>
+  }: RendererProps<{ title: string; subtitle: string; sources: Source[] }>) => {
+    const visibleSources = props.sources.slice(0, 3);
+    return (
+      <div className="source-card">
+        <div className="widget-copy">
+          <h1>{props.title}</h1>
+          <p>{props.subtitle}</p>
+        </div>
+        <div className="source-list">
+          {visibleSources.length ? (
+            visibleSources.map((source) => (
+              <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>
+                <span>
+                  <strong>{cleanSourceText(source.title)}</strong>
+                  {source.snippet ? <em>{trimSnippet(source.snippet)}</em> : null}
+                </span>
+                <small>{source.label}</small>
+              </a>
+            ))
+          ) : (
+            <div className="source-empty">No live citations</div>
+          )}
+        </div>
       </div>
-      <div className="source-list">
-        {props.sources.length ? (
-          props.sources.map((source) => (
-            <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>
-              <span>{source.title}</span>
-              <small>{source.label}</small>
-            </a>
-          ))
-        ) : (
-          <div className="source-empty">No live citations</div>
-        )}
-      </div>
-    </div>
-  ),
+    );
+  },
 };
 
 export const signalCatalog = createCatalog(
@@ -162,4 +175,22 @@ function MiniLineChart({ data }: { data: TrendDatum[] }) {
       })}
     </svg>
   );
+}
+
+function trimSnippet(snippet: string) {
+  const normalized = cleanSourceText(snippet);
+  return normalized.length > 130 ? `${normalized.slice(0, 127)}...` : normalized;
+}
+
+function cleanSourceText(text: string) {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, code: string) => String.fromCharCode(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number.parseInt(code, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
 }

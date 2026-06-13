@@ -902,7 +902,7 @@ async function resolveGrounding(
   const cached = await getCachedEffect<Grounding>("linkup-grounding", input);
   if (cached) {
     return {
-      grounding: { ...cached.output, reused: true },
+      grounding: cleanGrounding({ ...cached.output, reused: true }),
       effect: { key: cached.key, reused: cached.reused },
     };
   }
@@ -916,12 +916,12 @@ async function resolveGrounding(
     const grounding: Grounding = {
       provider: "linkup",
       reused: false,
-      answer: result.answer,
+      answer: cleanLinkupText(result.answer),
       sources: result.sources.slice(0, 4).map((source) => ({
-        title: source.name,
+        title: cleanLinkupText(source.name),
         label: hostname(source.url),
         url: source.url,
-        snippet: source.snippet,
+        snippet: source.snippet ? cleanLinkupText(source.snippet) : undefined,
       })),
     };
     const effect = await cacheEffect("linkup-grounding", input, grounding, false, { world });
@@ -1115,6 +1115,31 @@ function hostname(url: string) {
   } catch {
     return url;
   }
+}
+
+function cleanLinkupText(text: string) {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, code: string) => String.fromCharCode(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number.parseInt(code, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanGrounding(grounding: Grounding): Grounding {
+  return {
+    ...grounding,
+    answer: cleanLinkupText(grounding.answer),
+    sources: grounding.sources.map((source) => ({
+      ...source,
+      title: cleanLinkupText(source.title),
+      snippet: source.snippet ? cleanLinkupText(source.snippet) : undefined,
+    })),
+  };
 }
 
 async function remember(world: WorldId, tx: number, key: string, value: string) {
