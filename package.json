@@ -1,0 +1,15 @@
+{
+  "name": "signal-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n server,web -c black,blue \"pnpm --filter @sig/server dev\" \"pnpm --filter @sig/web dev\"",
+    "typecheck": "pnpm -r typecheck",
+    "reset": "rm -f data/signal.sqlite"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.3",
+    "typescript": "6.0.3"
+  },
+  "packageManager": "pnpm@11.6.0"
+}

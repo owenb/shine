@@ -1,0 +1,9 @@
+node_modules
+.env
+.env.local
+.claude
+starter/
+dist
+.DS_Store
+data/*.sqlite
+data/*.sqlite-*

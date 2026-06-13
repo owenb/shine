@@ -1,0 +1,16 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  '@google/genai': true
+  '@scarf/scarf': false
+  esbuild: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - '@copilotkit/a2ui-renderer@1.60.1'
+  - '@copilotkit/runtime@1.60.1'
+  - '@copilotkit/shared@1.60.1'
+  - '@copilotkit/web-inspector@1.60.1'
