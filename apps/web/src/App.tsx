@@ -20,7 +20,6 @@ import { signalCatalog } from "./a2ui-catalog";
 import {
   isWorldId,
   normalizeWidgetFrame,
-  worlds,
   type AgentRole,
   type Receipt,
   type WidgetFrame,
@@ -29,12 +28,11 @@ import {
 } from "@sig/core";
 import { FabricSurface } from "./FabricSurface";
 import { VoiceSurface } from "./VoiceSurface";
-import shineLogo from "./assets/shine-logo.png";
+import { ShineBackground } from "./ShineBackground";
+import { Scrubber } from "./Scrubber";
+import { users } from "./users";
 
-const worldLabels: Record<WorldId, string> = {
-  "world-a": "World A",
-  "world-b": "World B",
-};
+type RendererKind = "dom" | "fabric" | "voice";
 
 type FlightEffect = {
   world: WorldId;
@@ -71,18 +69,20 @@ export function App() {
 }
 
 function SignalApp() {
-  const [world, setWorld] = useState<WorldId>("world-a");
+  const [userId, setUserId] = useState<string>(users[0].id);
   const [state, setState] = useState<WorldState | null>(null);
   const [atTx, setAtTx] = useState<number | null>(null);
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [scrubbing, setScrubbing] = useState(false);
   const [flight, setFlight] = useState<FlightRecorder | null>(null);
   const [componentStyle, setComponentStyle] = useState<CSSProperties | null>(null);
+  const [rendererOverride, setRendererOverride] = useState<RendererKind | null>(null);
+  const [rendererFlash, setRendererFlash] = useState(false);
   const stateCache = useRef(new Map<string, WorldState>());
   const inflightState = useRef(new Map<string, Promise<WorldState>>());
-  const draggingScrubber = useRef(false);
+  const user = users.find((item) => item.id === userId) ?? users[0];
+  const world: WorldId = user.world;
   const { copilotkit } = useCopilotKit();
   const { agent } = useAgent({
     agentId: "builder",
@@ -157,6 +157,34 @@ function SignalApp() {
     );
   }, [state, timeline]);
   const live = state ? state.selectedTx === state.headTx : true;
+  const activeRenderer: RendererKind = rendererOverride ?? state?.preferences.renderer ?? "dom";
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== "r" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const el = event.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      event.preventDefault();
+      const order: RendererKind[] = ["dom", "fabric", "voice"];
+      setRendererOverride((prev) => {
+        const current = prev ?? state?.preferences.renderer ?? "dom";
+        return order[(order.indexOf(current) + 1) % order.length];
+      });
+      setRendererFlash(true);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state?.preferences.renderer]);
+
+  useEffect(() => {
+    if (!rendererFlash) return;
+    const id = window.setTimeout(() => setRendererFlash(false), 1400);
+    return () => window.clearTimeout(id);
+  }, [rendererFlash, rendererOverride]);
+
+  useEffect(() => {
+    setRendererOverride(null);
+  }, [state?.preferences.renderer, world]);
 
   useEffect(() => {
     for (const item of timeline) {
@@ -218,7 +246,7 @@ function SignalApp() {
       });
       await copilotkit.runAgent({ agent });
       if (!isWorldState(agent.state)) {
-        throw new Error("CopilotKit builder did not return a Signal UI state snapshot");
+        throw new Error("CopilotKit builder did not return a Shine state snapshot");
       }
       cacheWorldState(agent.state);
       setAtTx(null);
@@ -240,20 +268,6 @@ function SignalApp() {
     setAtTx(nextAtTx);
   }
 
-  function scrubFromPointer(event: PointerEvent<HTMLDivElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = clamp((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
-    scrub(Math.round(ratio * Math.max(timeline.length - 1, 0)));
-  }
-
-  function stopScrubbing(event: PointerEvent<HTMLDivElement>) {
-    draggingScrubber.current = false;
-    setScrubbing(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  }
-
   const commitLayout = useCallback(
     async (surfaceId: string, frame: WidgetFrame) => {
       if (!state) return;
@@ -267,36 +281,56 @@ function SignalApp() {
 
   return (
     <A2UIProvider catalog={signalCatalog}>
+      <ShineBackground palette={user.bg} />
       <main
         className="app-shell"
-        style={componentStyle ?? undefined}
+        data-live={live ? "true" : "false"}
+        data-density={user.density}
+        style={{ ...(componentStyle ?? {}), ...user.theme } as CSSProperties}
       >
         <header className="topbar">
           <div className="brand">
-            <img src={shineLogo} alt="shine" className="brand-logo" />
+            <span className="brand-mark" aria-hidden="true" />
+            Shine
+            <span className={state?.redis.connected ? "memory-dot on" : "memory-dot"} />
           </div>
-          <div className="world-toggle" aria-label="World">
-            {worlds.map((id) => (
-              <button
-                key={id}
-                type="button"
-                className={id === world ? "selected" : ""}
-                onClick={() => {
-                  setWorld(id);
-                  setAtTx(null);
-                }}
-              >
-                {worldLabels[id]}
-              </button>
-            ))}
+          <div className="user-switcher" role="radiogroup" aria-label="User">
+            <span className="user-name">{user.name}</span>
+            <div className="user-avatars">
+              {users.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={item.id === userId}
+                  aria-label={item.name}
+                  title={item.name}
+                  className={item.id === userId ? "user-avatar selected" : "user-avatar"}
+                  style={{ background: item.avatar }}
+                  onClick={() => {
+                    setUserId(item.id);
+                    setAtTx(null);
+                  }}
+                >
+                  {item.initial}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
 
         <section className="canvas" aria-label="A2UI Surface">
-          <DesktopSurface state={state} onLayoutCommit={commitLayout} />
+          <DesktopSurface state={state} renderer={activeRenderer} onLayoutCommit={commitLayout} />
         </section>
 
         <FlightRecorderPanel state={state} flight={flight} />
+
+        {rendererFlash ? (
+          <div className="renderer-flash" aria-live="polite">
+            <span>{rendererLabel(activeRenderer)}</span>
+            <small>press R to cycle</small>
+          </div>
+        ) : null}
 
         <section className="composer-wrap" aria-label="Command composer">
           <div className="composer">
@@ -322,51 +356,14 @@ function SignalApp() {
 
           {error ? <p className="composer-error">Agent failed: {error}</p> : null}
 
-          <div className="scrubber">
-            <span>tx {String(state?.selectedTx ?? 0).padStart(3, "0")}</span>
-            <div
-              className={scrubbing ? "scrub-track dragging" : "scrub-track"}
-              role="slider"
-              tabIndex={0}
-              aria-label="Transaction scrubber"
-              aria-valuemin={0}
-              aria-valuemax={Math.max(timeline.length - 1, 0)}
-              aria-valuenow={selectedIndex}
-              onPointerDown={(event) => {
-                event.currentTarget.setPointerCapture(event.pointerId);
-                draggingScrubber.current = true;
-                setScrubbing(true);
-                scrubFromPointer(event);
-              }}
-              onPointerMove={(event) => {
-                if (draggingScrubber.current) scrubFromPointer(event);
-              }}
-              onPointerUp={stopScrubbing}
-              onPointerCancel={stopScrubbing}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowLeft") scrub(Math.max(selectedIndex - 1, 0));
-                if (event.key === "ArrowRight") {
-                  scrub(Math.min(selectedIndex + 1, Math.max(timeline.length - 1, 0)));
-                }
-              }}
-            >
-              <div
-                className="scrub-fill"
-                style={{
-                  width: `${timeline.length <= 1 ? 0 : (selectedIndex / (timeline.length - 1)) * 100}%`,
-                }}
-              />
-              <div
-                className="scrub-thumb"
-                style={{
-                  left: `${timeline.length <= 1 ? 0 : (selectedIndex / (timeline.length - 1)) * 100}%`,
-                }}
-              />
-            </div>
-            <button type="button" onClick={() => setAtTx(null)} className={live ? "live" : ""}>
-              Live
-            </button>
-          </div>
+          <Scrubber
+            length={timeline.length}
+            index={selectedIndex}
+            live={live}
+            label={`tx ${String(state?.selectedTx ?? 0).padStart(3, "0")}`}
+            onScrub={scrub}
+            onLive={() => setAtTx(null)}
+          />
         </section>
       </main>
     </A2UIProvider>
@@ -703,9 +700,11 @@ function frameChanged(first: WidgetFrame, second: WidgetFrame) {
 
 function DesktopSurface({
   state,
+  renderer,
   onLayoutCommit,
 }: {
   state: WorldState | null;
+  renderer: RendererKind;
   onLayoutCommit: (surfaceId: string, frame: WidgetFrame) => Promise<void>;
 }) {
   if (!state?.surface) {
@@ -729,21 +728,21 @@ function DesktopSurface({
       editable={editable}
       onCommit={(nextFrame) => onLayoutCommit(surfaceId, nextFrame)}
     >
-      <SurfaceSwitch state={readyState} />
+      <SurfaceSwitch state={readyState} renderer={renderer} />
     </DraggableWidget>
   );
 }
 
-function SurfaceSwitch({ state }: { state: ReadyWorldState }) {
+function SurfaceSwitch({ state, renderer }: { state: ReadyWorldState; renderer: RendererKind }) {
   if (!state?.surface) {
     return <div className="empty-widget" />;
   }
 
-  if (state.preferences.renderer === "fabric") {
+  if (renderer === "fabric") {
     return <FabricSurface surface={state.surface} scene={state.scene} />;
   }
 
-  if (state.preferences.renderer === "voice") {
+  if (renderer === "voice") {
     return (
       <VoiceSurface surface={state.surface}>
         <DomSurface state={state} />
@@ -758,27 +757,26 @@ type ReadyWorldState = WorldState & { surface: NonNullable<WorldState["surface"]
 
 function DomSurface({ state }: { state: ReadyWorldState }) {
   const { processMessages, clearSurfaces } = useA2UI();
+  const prevKind = useRef<string | null>(null);
   const createdSurface = useRef(false);
 
   useEffect(() => {
-    if (state.surface.ops) {
-      const ops = createdSurface.current
-        ? state.surface.ops.filter((op) => !("createSurface" in op))
-        : state.surface.ops;
+    if (prevKind.current !== state.surface.kind) {
+      clearSurfaces();
+      createdSurface.current = false;
+      prevKind.current = state.surface.kind;
+    }
+    const ops = state.surface.ops ?? [];
+    if (createdSurface.current) {
+      processMessages(ops.filter((op) => !("createSurface" in op)));
+    } else {
       processMessages(ops);
       createdSurface.current = true;
     }
-  }, [processMessages, state.surface.ops]);
-
-  useEffect(() => {
-    return () => {
-      clearSurfaces();
-      createdSurface.current = false;
-    };
-  }, [clearSurfaces]);
+  }, [clearSurfaces, processMessages, state.surface.kind, state.selectedTx, state.surface.ops]);
 
   return (
-    <div className="surface-stage">
+    <div className="surface-stage" key={`${state.world}:${state.surface.kind}`}>
       <A2UIRenderer surfaceId={state.surface.surfaceId} fallback={<div className="empty-widget" />} />
     </div>
   );
@@ -842,12 +840,12 @@ function stateCacheKey(world: WorldId, atTx: number | null) {
   return `${world}:${atTx ?? "live"}`;
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
 function compactModel(model: string) {
   return model.replace(/^gemini-/, "").replace(/-flash/, " flash");
+}
+
+function rendererLabel(renderer: RendererKind) {
+  return renderer === "fabric" ? "Cloth" : renderer === "voice" ? "Voice" : "DOM";
 }
 
 function isWorldState(value: unknown): value is WorldState {

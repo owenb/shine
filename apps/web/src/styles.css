@@ -11,7 +11,11 @@
   --muted: #777986;
   --soft: #f7f7f8;
   --accent: #1677ff;
+  --accent-soft: rgba(22, 119, 255, 0.12);
+  --accent-line: rgba(22, 119, 255, 0.4);
   --green: #1db36b;
+  --solid: #ffffff;
+  --glass: rgba(255, 255, 255, 0.74);
   --component-radius: 12px;
   --component-shadow:
     0 40px 90px rgba(20, 24, 32, 0.12),
@@ -42,6 +46,24 @@ cpk-web-inspector {
   pointer-events: none !important;
 }
 
+.shine-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+}
+
+.shine-bg--fallback {
+  background:
+    radial-gradient(60% 50% at 22% 18%, rgba(120, 140, 255, 0.16), transparent 70%),
+    radial-gradient(55% 45% at 82% 28%, rgba(190, 150, 255, 0.14), transparent 70%),
+    radial-gradient(60% 55% at 50% 92%, rgba(150, 235, 210, 0.12), transparent 72%),
+    #ffffff;
+}
+
 button,
 input {
   font: inherit;
@@ -52,13 +74,14 @@ button {
 }
 
 .app-shell {
+  z-index: 1;
   height: 100vh;
   min-height: 100vh;
   position: relative;
   display: grid;
   grid-template-rows: 56px 1fr auto;
   overflow: hidden;
-  background: #ffffff;
+  background: transparent;
 }
 
 .topbar {
@@ -71,16 +94,24 @@ button {
 .brand {
   display: inline-flex;
   align-items: center;
-  width: 116px;
-  min-width: 116px;
+  gap: 9px;
+  color: #111114;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0;
   pointer-events: none;
 }
 
-.brand-logo {
-  display: block;
-  width: 100%;
-  height: auto;
-  opacity: 0.3;
+.brand-mark {
+  width: 16px;
+  height: 16px;
+  border-radius: 6px;
+  background:
+    radial-gradient(120% 120% at 30% 20%, #ffffff 0%, rgba(255, 255, 255, 0) 45%),
+    conic-gradient(from 210deg, #1677ff, #7b5bff, #14b083, #1677ff);
+  box-shadow:
+    0 2px 8px rgba(22, 119, 255, 0.34),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5);
 }
 
 .memory-dot {
@@ -92,6 +123,59 @@ button {
 
 .memory-dot.on {
   background: var(--green);
+}
+
+.user-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-name {
+  color: #111114;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.user-avatars {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 1px 7px rgba(20, 24, 32, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.user-avatar {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 750;
+  opacity: 0.5;
+  transform: scale(0.9);
+  transition: opacity 180ms ease, transform 260ms cubic-bezier(0.34, 1.4, 0.5, 1), box-shadow 180ms ease;
+}
+
+.user-avatar:hover {
+  opacity: 0.85;
+}
+
+.user-avatar.selected {
+  opacity: 1;
+  transform: scale(1.06);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+    0 0 0 2px #ffffff,
+    0 0 0 3.5px var(--accent-line),
+    0 4px 12px var(--accent-soft);
 }
 
 .world-toggle {
@@ -127,6 +211,10 @@ button {
   min-height: 0;
   margin: 0 24px 156px;
   overflow: hidden;
+}
+
+.app-shell[data-live="false"] .canvas {
+  filter: saturate(0.74) brightness(0.985);
 }
 
 .surface-stage {
@@ -253,6 +341,15 @@ button {
   background: rgba(255, 255, 255, 0.92);
   box-shadow: var(--component-shadow);
   backdrop-filter: blur(22px);
+}
+
+.app-shell[data-density="compact"] .signal-widget {
+  padding: 28px;
+  --component-radius: 16px;
+}
+
+.app-shell[data-density="spacious"] .signal-widget {
+  padding: 48px;
 }
 
 .signal-widget--ledger {
@@ -674,14 +771,48 @@ button {
   line-height: 1.35;
 }
 
+.renderer-flash {
+  position: fixed;
+  left: 50%;
+  bottom: 104px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+  padding: 7px 8px 7px 14px;
+  border: 1px solid rgba(17, 17, 20, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 18px 60px rgba(20, 24, 32, 0.12);
+  color: #111114;
+  font-size: 12px;
+  font-weight: 650;
+  backdrop-filter: blur(22px);
+  animation: float-in 280ms ease;
+}
+
+.renderer-flash small {
+  color: #a0a2aa;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(17, 17, 20, 0.04);
+}
+
 .scrubber {
   display: grid;
-  grid-template-columns: 48px 1fr 38px;
+  grid-template-columns: 54px 1fr 42px;
   align-items: center;
   gap: 8px;
   padding: 0 2px;
   color: #a0a2aa;
   font-size: 11px;
+}
+
+.scrubber-tx {
+  font-variant-numeric: tabular-nums;
 }
 
 .scrub-track {
@@ -708,6 +839,7 @@ button {
   position: absolute;
   left: 0;
   top: 6px;
+  width: calc(var(--pos, 0) * 100%);
   height: 2px;
   border-radius: 999px;
   background: var(--accent);
@@ -716,6 +848,7 @@ button {
 
 .scrub-thumb {
   position: absolute;
+  left: calc(var(--pos, 0) * 100%);
   top: 2px;
   width: 10px;
   height: 10px;
@@ -729,14 +862,22 @@ button {
     transform 120ms ease;
 }
 
-.scrub-track.dragging .scrub-fill,
-.scrub-track.dragging .scrub-thumb {
+.scrub-track.is-dragging .scrub-fill,
+.scrub-track.is-dragging .scrub-thumb {
   transition: none;
 }
 
-.scrub-track.dragging .scrub-thumb {
+.scrub-track.is-dragging .scrub-thumb {
   transform: translateX(-50%) scale(1.18);
   box-shadow: 0 0 0 7px rgba(22, 119, 255, 0.12);
+}
+
+.scrub-ripple {
+  position: absolute;
+  inset: -11px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  animation: scrub-ripple 520ms ease-out forwards;
 }
 
 .scrubber button {
@@ -746,7 +887,7 @@ button {
   font-size: 11px;
 }
 
-.scrubber button.live {
+.scrubber button.is-live {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -754,7 +895,7 @@ button {
   font-weight: 650;
 }
 
-.scrubber button.live::after {
+.scrubber button.is-live::after {
   content: "";
   width: 7px;
   height: 7px;
@@ -780,6 +921,17 @@ button {
   }
   50% {
     transform: scaleY(1.35);
+  }
+}
+
+@keyframes scrub-ripple {
+  from {
+    opacity: 0.35;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.9);
   }
 }
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { z } from "zod";
 import { createCatalog, type CatalogRenderers, type RendererProps } from "@copilotkit/a2ui-renderer";
 import { CATALOG_ID, type Source, type TableRow, type TrendDatum } from "@sig/core";
@@ -8,7 +8,7 @@ const stringOrPath = z.union([z.string(), z.object({ path: z.string() })]);
 
 export const definitions = {
   SignalWidget: {
-    description: "Minimal outer frame for one generated Signal UI widget.",
+    description: "Minimal outer frame for one generated Shine widget.",
     props: z.object({
       child: childRef,
       kind: z.enum(["metric", "trend", "table", "sources"]),
@@ -58,6 +58,45 @@ export const definitions = {
   },
 };
 
+/**
+ * An odometer for a single value: when the string changes, the new one rises in
+ * (with a whisper of blur) while the old one lifts out. As you scrub back through
+ * time, the hero metric rolls between states instead of snapping — the change is
+ * something you *watch happen*.
+ */
+function RollingValue({ value }: { value: string }) {
+  const prev = useRef(value);
+  const counter = useRef(0);
+  const [leaving, setLeaving] = useState<{ text: string; key: number } | null>(null);
+
+  useEffect(() => {
+    if (prev.current === value) return;
+    const previous = prev.current;
+    prev.current = value;
+    // Reduced motion: swap the value cleanly, no overlapping leave element.
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setLeaving(null);
+      return;
+    }
+    setLeaving({ text: previous, key: counter.current++ });
+    const id = window.setTimeout(() => setLeaving(null), 480);
+    return () => window.clearTimeout(id);
+  }, [value]);
+
+  return (
+    <span className="roll">
+      <span className="roll-in" key={value}>
+        {value}
+      </span>
+      {leaving ? (
+        <span className="roll-out" key={leaving.key} aria-hidden="true">
+          {leaving.text}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 const renderers = {
   SignalWidget: ({
     props,
@@ -74,8 +113,12 @@ const renderers = {
     <div className="metric-card">
       <p>{props.label}</p>
       <div>
-        <strong>{props.value}</strong>
-        <span>{props.delta}</span>
+        <strong>
+          <RollingValue value={props.value} />
+        </strong>
+        <span>
+          <RollingValue value={props.delta} />
+        </span>
       </div>
     </div>
   ),
@@ -146,7 +189,7 @@ const renderers = {
 export const signalCatalog = createCatalog(
   definitions,
   renderers as unknown as CatalogRenderers<typeof definitions>,
-  { catalogId: CATALOG_ID, includeBasicCatalog: false },
+  { catalogId: CATALOG_ID, includeBasicCatalog: true },
 );
 
 function MiniLineChart({ data }: { data: TrendDatum[] }) {
