@@ -583,8 +583,8 @@ function dataForIntent(
   }
 
   return {
-    title: "Revenue signal",
-    subtitle: "A generated widget compiled from Signal into A2UI.",
+    title: "Revenue overview",
+    subtitle: "A live widget the agent composed into A2UI.",
     stat: { label: "ARR", value: "$12.4M", delta: "+18%" },
     trend: [
       { label: "Jan", value: 42 },

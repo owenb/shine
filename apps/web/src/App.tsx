@@ -27,6 +27,8 @@ const worldLabels: Record<WorldId, string> = {
   "world-b": "World B",
 };
 
+type RendererKind = "dom" | "fabric" | "voice";
+
 type FlightEffect = {
   world: WorldId;
   tx: number;
@@ -69,6 +71,8 @@ function SignalApp() {
   const [error, setError] = useState<string | null>(null);
   const [flight, setFlight] = useState<FlightRecorder | null>(null);
   const [componentStyle, setComponentStyle] = useState<CSSProperties | null>(null);
+  const [rendererOverride, setRendererOverride] = useState<RendererKind | null>(null);
+  const [rendererFlash, setRendererFlash] = useState(false);
   const stateCache = useRef(new Map<string, WorldState>());
   const inflightState = useRef(new Map<string, Promise<WorldState>>());
   const { copilotkit } = useCopilotKit();
@@ -145,6 +149,36 @@ function SignalApp() {
     );
   }, [state, timeline]);
   const live = state ? state.selectedTx === state.headTx : true;
+  const activeRenderer: RendererKind = rendererOverride ?? state?.preferences.renderer ?? "dom";
+
+  // Press R to cycle rendering engines (DOM → Cloth → Voice). A renderer command
+  // from the agent (or a world switch) clears the manual override.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== "r" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const el = event.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      event.preventDefault();
+      const order: RendererKind[] = ["dom", "fabric", "voice"];
+      setRendererOverride((prev) => {
+        const current = prev ?? state?.preferences.renderer ?? "dom";
+        return order[(order.indexOf(current) + 1) % order.length];
+      });
+      setRendererFlash(true);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state?.preferences.renderer]);
+
+  useEffect(() => {
+    if (!rendererFlash) return;
+    const id = window.setTimeout(() => setRendererFlash(false), 1400);
+    return () => window.clearTimeout(id);
+  }, [rendererFlash, rendererOverride]);
+
+  useEffect(() => {
+    setRendererOverride(null);
+  }, [state?.preferences.renderer, world]);
 
   useEffect(() => {
     for (const item of timeline) {
@@ -206,7 +240,7 @@ function SignalApp() {
       });
       await copilotkit.runAgent({ agent });
       if (!isWorldState(agent.state)) {
-        throw new Error("CopilotKit builder did not return a Signal UI state snapshot");
+        throw new Error("CopilotKit builder did not return a Shine surface snapshot");
       }
       cacheWorldState(agent.state);
       setAtTx(null);
@@ -263,10 +297,17 @@ function SignalApp() {
         </header>
 
         <section className="canvas" aria-label="A2UI Surface">
-          <SurfaceSwitch state={state} />
+          <SurfaceSwitch state={state} renderer={activeRenderer} />
         </section>
 
         <FlightRecorderPanel state={state} flight={flight} />
+
+        {rendererFlash ? (
+          <div className="renderer-flash" aria-live="polite">
+            <span>{rendererLabel(activeRenderer)}</span>
+            <small>press R to cycle</small>
+          </div>
+        ) : null}
 
         <section className="composer-wrap" aria-label="Command composer">
           <div className="composer">
@@ -390,17 +431,17 @@ function ProofBadge({
   );
 }
 
-function SurfaceSwitch({ state }: { state: WorldState | null }) {
+function SurfaceSwitch({ state, renderer }: { state: WorldState | null; renderer: RendererKind }) {
   if (!state?.surface) {
     return <div className="empty-widget" />;
   }
   const readyState = state as ReadyWorldState;
 
-  if (readyState.preferences.renderer === "fabric") {
+  if (renderer === "fabric") {
     return <FabricSurface surface={readyState.surface} scene={readyState.scene} />;
   }
 
-  if (readyState.preferences.renderer === "voice") {
+  if (renderer === "voice") {
     return (
       <VoiceSurface surface={readyState.surface}>
         <DomSurface state={readyState} />
@@ -492,6 +533,10 @@ function stateCacheKey(world: WorldId, atTx: number | null) {
 
 function compactModel(model: string) {
   return model.replace(/^gemini-/, "").replace(/-flash/, " flash");
+}
+
+function rendererLabel(renderer: RendererKind) {
+  return renderer === "fabric" ? "Cloth" : renderer === "voice" ? "Voice" : "DOM";
 }
 
 function isWorldState(value: unknown): value is WorldState {

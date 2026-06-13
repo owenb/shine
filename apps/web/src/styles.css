@@ -245,13 +245,12 @@ cpk-web-inspector {
   box-shadow: var(--component-shadow);
   backdrop-filter: blur(20px) saturate(1.2);
   -webkit-backdrop-filter: blur(20px) saturate(1.2);
-  transition:
-    transform var(--t) var(--ease),
-    box-shadow var(--t) var(--ease);
+  transition: box-shadow var(--t) var(--ease);
+  /* A subtle, slow liquid sway so the surface feels alive (off for reduced motion). */
+  animation: widget-wave 13s ease-in-out infinite;
 }
 
 .signal-widget:hover {
-  transform: translateY(-2px);
   box-shadow: 0 44px 100px rgba(16, 18, 28, 0.14), 0 12px 28px rgba(16, 18, 28, 0.07);
 }
 
@@ -747,6 +746,39 @@ cpk-web-inspector {
   animation: surface-in var(--t) var(--ease);
 }
 
+/* Renderer-cycle hint (R) */
+.renderer-flash {
+  position: fixed;
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--glass-strong);
+  box-shadow: var(--sh-float);
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  animation: surface-in var(--t) var(--ease);
+}
+
+.renderer-flash small {
+  color: var(--faint);
+  font-weight: 500;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--pill);
+  background: rgba(16, 18, 28, 0.04);
+}
+
 /* ── Scrubber ────────────────────────────────────────────────────────────── */
 .scrubber {
   display: grid;
@@ -995,6 +1027,22 @@ cpk-web-inspector {
   }
   50% {
     opacity: 0.95;
+  }
+}
+
+@keyframes widget-wave {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  25% {
+    transform: translate3d(1.2px, -1.4px, 0) rotate(0.18deg);
+  }
+  50% {
+    transform: translate3d(0, -2px, 0) rotate(0deg);
+  }
+  75% {
+    transform: translate3d(-1.2px, -1.4px, 0) rotate(-0.18deg);
   }
 }
 

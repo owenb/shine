@@ -47,8 +47,8 @@ export function FabricSurface({
     const width = 920;
     const height = 520;
     const textureCanvas = document.createElement("canvas");
-    textureCanvas.width = width * 2;
-    textureCanvas.height = height * 2;
+    textureCanvas.width = width * 3;
+    textureCanvas.height = height * 3;
     const sceneGraphRef = { current: sceneGraph };
     drawScene(textureCanvas, sceneGraphRef.current);
 
@@ -64,6 +64,7 @@ export function FabricSurface({
 
     const texture = new THREE.CanvasTexture(textureCanvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
     const segmentsX = 48;
     const segmentsY = 28;
     const geometry = new THREE.PlaneGeometry(5.6, 3.15, segmentsX, segmentsY);

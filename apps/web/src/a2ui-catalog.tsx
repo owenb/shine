@@ -8,7 +8,7 @@ const stringOrPath = z.union([z.string(), z.object({ path: z.string() })]);
 
 export const definitions = {
   SignalWidget: {
-    description: "Minimal outer frame for one generated Signal UI widget.",
+    description: "Minimal outer frame for one generated Shine widget.",
     props: z.object({
       child: childRef,
       kind: z.enum(["metric", "trend", "table", "sources"]),
@@ -176,7 +176,7 @@ const renderers = {
 export const signalCatalog = createCatalog(
   definitions,
   renderers as unknown as CatalogRenderers<typeof definitions>,
-  { catalogId: CATALOG_ID, includeBasicCatalog: false },
+  { catalogId: CATALOG_ID, includeBasicCatalog: true },
 );
 
 function MiniLineChart({ data }: { data: TrendDatum[] }) {
