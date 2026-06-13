@@ -16,16 +16,12 @@ import {
   useCopilotKit,
 } from "@copilotkit/react-core/v2";
 import { signalCatalog } from "./a2ui-catalog";
-import { isWorldId, worlds, type Receipt, type WorldId, type WorldState } from "@sig/core";
+import { isWorldId, type Receipt, type WorldId, type WorldState } from "@sig/core";
 import { FabricSurface } from "./FabricSurface";
 import { VoiceSurface } from "./VoiceSurface";
 import { ShineBackground } from "./ShineBackground";
 import { Scrubber } from "./Scrubber";
-
-const worldLabels: Record<WorldId, string> = {
-  "world-a": "World A",
-  "world-b": "World B",
-};
+import { users } from "./users";
 
 type RendererKind = "dom" | "fabric" | "voice";
 
@@ -63,7 +59,7 @@ export function App() {
 }
 
 function SignalApp() {
-  const [world, setWorld] = useState<WorldId>("world-a");
+  const [userId, setUserId] = useState<string>(users[0].id);
   const [state, setState] = useState<WorldState | null>(null);
   const [atTx, setAtTx] = useState<number | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -75,6 +71,8 @@ function SignalApp() {
   const [rendererFlash, setRendererFlash] = useState(false);
   const stateCache = useRef(new Map<string, WorldState>());
   const inflightState = useRef(new Map<string, Promise<WorldState>>());
+  const user = users.find((u) => u.id === userId) ?? users[0];
+  const world: WorldId = user.world;
   const { copilotkit } = useCopilotKit();
   const { agent } = useAgent({
     agentId: "builder",
@@ -264,11 +262,12 @@ function SignalApp() {
 
   return (
     <A2UIProvider catalog={signalCatalog}>
-      <ShineBackground />
+      <ShineBackground palette={user.bg} />
       <main
         className="app-shell"
         data-live={live ? "true" : "false"}
-        style={componentStyle ?? undefined}
+        data-density={user.density}
+        style={{ ...(componentStyle ?? {}), ...user.theme } as CSSProperties}
       >
         <header className="topbar">
           <div className="brand">
@@ -276,23 +275,28 @@ function SignalApp() {
             Shine
             <span className={state?.redis.connected ? "memory-dot on" : "memory-dot"} />
           </div>
-          <div className="world-toggle" data-active={world} role="radiogroup" aria-label="World">
-            <span className="world-toggle-thumb" aria-hidden="true" />
-            {worlds.map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="radio"
-                aria-checked={id === world}
-                className={id === world ? "selected" : ""}
-                onClick={() => {
-                  setWorld(id);
-                  setAtTx(null);
-                }}
-              >
-                {worldLabels[id]}
-              </button>
-            ))}
+          <div className="user-switcher" role="radiogroup" aria-label="User">
+            <span className="user-name">{user.name}</span>
+            <div className="user-avatars">
+              {users.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={u.id === userId}
+                  aria-label={u.name}
+                  title={u.name}
+                  className={u.id === userId ? "user-avatar selected" : "user-avatar"}
+                  style={{ background: u.avatar }}
+                  onClick={() => {
+                    setUserId(u.id);
+                    setAtTx(null);
+                  }}
+                >
+                  {u.initial}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
 

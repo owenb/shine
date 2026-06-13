@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const worlds = ["world-a", "world-b"] as const;
+export const worlds = ["world-a", "world-b", "world-c", "world-d", "world-e"] as const;
 export type WorldId = (typeof worlds)[number];
 
 export const WorldIdSchema = z.enum(worlds);
@@ -221,20 +221,18 @@ export function isWorldId(value: string): value is WorldId {
 }
 
 export function defaultPreferences(world: WorldId): WorldPreferences {
-  if (world === "world-b") {
-    return {
-      presentation: "table",
-      tone: "calm",
-      renderer: "dom",
-      component: "ledger",
-    };
+  switch (world) {
+    case "world-b":
+      return { presentation: "table", tone: "calm", renderer: "dom", component: "ledger" };
+    case "world-c":
+      return { presentation: "brief", tone: "calm", renderer: "dom", component: "brief" };
+    case "world-d":
+      return { presentation: "visual", tone: "sharp", renderer: "fabric", component: "crystal" };
+    case "world-e":
+      return { presentation: "table", tone: "sharp", renderer: "dom", component: "ledger" };
+    default:
+      return { presentation: "visual", tone: "sharp", renderer: "dom", component: "crystal" };
   }
-  return {
-    presentation: "visual",
-    tone: "sharp",
-    renderer: "dom",
-    component: "crystal",
-  };
 }
 
 export function composeSurface(

@@ -1,24 +1,27 @@
 import { useEffect, useRef } from "react";
+import type { BgPalette } from "./users";
 
 /**
- * Shine ambient background — a slow, luminous mesh-gradient aurora that drifts
- * behind frosted glass. Rendered in WebGL on a downscaled buffer (the gradient
- * is soft, so half-resolution is invisible but ~4x cheaper). Degrades to a
- * static CSS wash if WebGL is unavailable, and freezes for reduced-motion.
+ * Shine ambient background — a slow, luminous mesh-gradient aurora driven by a
+ * per-user palette. Rendered in WebGL on a downscaled buffer (the gradient is
+ * soft, so half-resolution is invisible but ~4x cheaper), throttled to ~30fps,
+ * paused off-screen, frozen for reduced-motion, and degrading to a CSS wash if
+ * WebGL is unavailable.
  *
- * Design intent: this should never demand attention. It is light, barely
- * moving, mostly white — a held breath, not a screensaver.
+ * Design intent: it should never demand attention. Pale, barely moving, mostly
+ * white — a held breath, not a screensaver. Switching users swaps the palette
+ * uniforms live (no context rebuild, no flash).
  */
 const FRAG = `
 precision highp float;
 uniform vec2 uRes;
 uniform float uTime;
-
-// A pale, luminous palette. White dominates; colour is a whisper.
-const vec3 PERIWINKLE = vec3(0.74, 0.79, 1.00);
-const vec3 VIOLET     = vec3(0.86, 0.78, 1.00);
-const vec3 MINT       = vec3(0.78, 0.96, 0.90);
-const vec3 BLUSH      = vec3(1.00, 0.89, 0.85);
+uniform vec3 uC1;
+uniform vec3 uC2;
+uniform vec3 uC3;
+uniform vec3 uC4;
+uniform float uSpeed;
+uniform float uLift;
 
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -30,7 +33,7 @@ void main() {
   vec2 p = uv;
   p.x *= aspect;
 
-  float t = uTime * 0.035;
+  float t = uTime * uSpeed;
 
   // Domain warp — gentle flow fields fold the gradient into itself.
   vec2 q = p;
@@ -43,13 +46,13 @@ void main() {
   float n3 = 0.5 + 0.5 * sin((q.x + q.y) * 1.4 + t * 0.6);
 
   vec3 col = vec3(1.0);
-  col = mix(col, PERIWINKLE, smoothstep(0.15, 0.95, n1) * 0.42);
-  col = mix(col, VIOLET,     smoothstep(0.10, 0.90, n2) * 0.36);
-  col = mix(col, MINT,       smoothstep(0.30, 1.00, n3) * 0.30);
-  col = mix(col, BLUSH,      smoothstep(0.55, 1.00, n1 * n2) * 0.28);
+  col = mix(col, uC1, smoothstep(0.15, 0.95, n1) * 0.42);
+  col = mix(col, uC2, smoothstep(0.10, 0.90, n2) * 0.36);
+  col = mix(col, uC3, smoothstep(0.30, 1.00, n3) * 0.30);
+  col = mix(col, uC4, smoothstep(0.55, 1.00, n1 * n2) * 0.28);
 
   // Lift toward white so the surface never competes with content.
-  col = mix(col, vec3(1.0), 0.30);
+  col = mix(col, vec3(1.0), uLift);
 
   // Soft radial brightening at centre, faint cool fall-off at the corners.
   float d = length(uv - 0.5);
@@ -82,8 +85,11 @@ function compile(gl: WebGLRenderingContext, type: number, src: string) {
   return shader;
 }
 
-export function ShineBackground() {
+export function ShineBackground({ palette }: { palette: BgPalette }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const applyRef = useRef<((p: BgPalette) => void) | null>(null);
+  const paletteRef = useRef(palette);
+  paletteRef.current = palette;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -98,7 +104,6 @@ export function ShineBackground() {
       powerPreference: "low-power",
     });
     if (!gl) {
-      // Fallback: a static CSS wash (defined in styles.css).
       canvas.classList.add("shine-bg--fallback");
       return;
     }
@@ -117,20 +122,27 @@ export function ShineBackground() {
 
     const buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    // Fullscreen triangle.
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     const aPos = gl.getAttribLocation(program, "aPos");
     gl.enableVertexAttribArray(aPos);
     gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
-    const uRes = gl.getUniformLocation(program, "uRes");
-    const uTime = gl.getUniformLocation(program, "uTime");
-
-    // Render at a downscaled resolution — the gradient is soft, so the cost
-    // saving is free quality. Cap so huge displays stay cheap.
-    // (Narrowed non-null aliases so the closures below keep the guarded types.)
     const ctx = gl;
     const cnv = canvas;
+    const uRes = ctx.getUniformLocation(program, "uRes");
+    const uTime = ctx.getUniformLocation(program, "uTime");
+    const uC = [1, 2, 3, 4].map((i) => ctx.getUniformLocation(program, `uC${i}`));
+    const uSpeed = ctx.getUniformLocation(program, "uSpeed");
+    const uLift = ctx.getUniformLocation(program, "uLift");
+
+    // Live palette swap (used on mount and whenever the user changes).
+    applyRef.current = (p: BgPalette) => {
+      for (let i = 0; i < 4; i++) ctx.uniform3f(uC[i], p.colors[i][0], p.colors[i][1], p.colors[i][2]);
+      ctx.uniform1f(uSpeed, p.speed);
+      ctx.uniform1f(uLift, p.lift);
+    };
+    applyRef.current(paletteRef.current);
+
     const SCALE = 0.5;
     function resize() {
       const w = Math.max(2, Math.floor(window.innerWidth * SCALE));
@@ -148,8 +160,6 @@ export function ShineBackground() {
     let raf = 0;
     let running = true;
     const start = performance.now();
-    // The aurora moves slowly enough that ~30fps is visually identical — and it
-    // halves how often the frosted-glass layers above must re-rasterise.
     const minDelta = 1000 / 30;
     let lastDraw = -minDelta;
 
@@ -160,12 +170,10 @@ export function ShineBackground() {
         ctx.uniform1f(uTime, reduceMotion ? 8 : (now - start) / 1000);
         ctx.drawArrays(ctx.TRIANGLES, 0, 3);
       }
-      // A single static frame is enough when motion is reduced.
       raf = reduceMotion ? 0 : requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
 
-    // Pause when the tab is hidden — never burn cycles off-screen.
     function onVisibility() {
       if (document.hidden) {
         running = false;
@@ -179,16 +187,22 @@ export function ShineBackground() {
 
     return () => {
       running = false;
+      applyRef.current = null;
       if (raf) cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
       document.removeEventListener("visibilitychange", onVisibility);
-      gl.deleteProgram(program);
-      gl.deleteShader(vert);
-      gl.deleteShader(frag);
-      gl.deleteBuffer(buffer);
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      ctx.deleteProgram(program);
+      ctx.deleteShader(vert);
+      ctx.deleteShader(frag);
+      ctx.deleteBuffer(buffer);
+      ctx.getExtension("WEBGL_lose_context")?.loseContext();
     };
   }, []);
+
+  // Swap the palette live when the active user changes — no context rebuild.
+  useEffect(() => {
+    applyRef.current?.(palette);
+  }, [palette]);
 
   return <canvas ref={canvasRef} className="shine-bg" aria-hidden="true" />;
 }

@@ -168,6 +168,63 @@ cpk-web-inspector {
   animation: dot-pulse 2.6s var(--ease) infinite;
 }
 
+/* ── User switcher (5 fake users; switching swaps the whole desktop) ──────── */
+.user-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  transition: color var(--t);
+}
+
+.user-avatars {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: var(--sh-1);
+}
+
+.user-avatar {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--pill);
+  padding: 0;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  opacity: 0.5;
+  transform: scale(0.9);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+  transition: opacity var(--t) var(--ease), transform var(--spring) 340ms, box-shadow var(--t);
+}
+
+.user-avatar:hover {
+  opacity: 0.85;
+}
+
+.user-avatar.selected {
+  opacity: 1;
+  transform: scale(1.06);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+    0 0 0 2px var(--solid),
+    0 0 0 3.5px var(--accent-line),
+    0 4px 12px var(--accent-soft);
+}
+
 /* ── World toggle (segmented, with a sliding thumb) ──────────────────────── */
 .world-toggle {
   position: relative;
@@ -252,6 +309,16 @@ cpk-web-inspector {
 
 .signal-widget:hover {
   box-shadow: 0 44px 100px rgba(16, 18, 28, 0.14), 0 12px 28px rgba(16, 18, 28, 0.07);
+}
+
+/* Per-user density */
+.app-shell[data-density="compact"] .signal-widget {
+  padding: 28px;
+  --component-radius: 16px;
+}
+
+.app-shell[data-density="spacious"] .signal-widget {
+  padding: 48px;
 }
 
 .signal-widget--ledger {
