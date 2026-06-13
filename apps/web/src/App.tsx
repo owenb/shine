@@ -626,7 +626,7 @@ function DesktopSurface({
   const visibleSurfaces = surfaces.filter((surface) => Boolean(state?.layout.widgets[surface.surfaceId]));
 
   if (!state || !visibleSurfaces.length) {
-    return <div className="empty-widget" />;
+    return null;
   }
   const editable = state.selectedTx === state.headTx;
 
@@ -715,7 +715,7 @@ function DomSurface({
 
   return (
     <div className="surface-stage" key={`${world}:${surface.surfaceId}:${surface.kind}`}>
-      <A2UIRenderer surfaceId={surface.surfaceId} fallback={<div className="empty-widget" />} />
+      <A2UIRenderer surfaceId={surface.surfaceId} fallback={null} />
     </div>
   );
 }
