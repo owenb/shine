@@ -271,6 +271,7 @@ button {
   min-width: 240px;
   min-height: 190px;
   z-index: 1;
+  container-type: size;
 }
 
 .desktop-widget.moving {
@@ -418,7 +419,7 @@ button {
 .signal-widget {
   width: min(680px, calc(100vw - 44px));
   min-height: 280px;
-  padding: 34px;
+  padding: 30px;
   border: 1px solid rgba(17, 17, 20, 0.08);
   border-radius: var(--component-radius);
   background: rgba(255, 255, 255, 0.92);
@@ -427,12 +428,12 @@ button {
 }
 
 .app-shell[data-density="compact"] .signal-widget {
-  padding: 28px;
+  padding: 24px;
   --component-radius: 16px;
 }
 
 .app-shell[data-density="spacious"] .signal-widget {
-  padding: 48px;
+  padding: 40px;
 }
 
 .signal-widget--ledger {
@@ -447,24 +448,24 @@ button {
 .widget-copy h1,
 .ledger-card h1 {
   margin: 0;
-  font-size: clamp(32px, 6vw, 52px);
-  line-height: 0.98;
+  font-size: clamp(24px, 6.5cqi, 38px);
+  line-height: 1.04;
   letter-spacing: 0;
   font-weight: 650;
 }
 
 .widget-copy p {
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   max-width: 440px;
   color: var(--muted);
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .metric-card p {
-  margin: 0 0 18px;
+  margin: 0 0 14px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .metric-card div {
@@ -474,22 +475,22 @@ button {
 }
 
 .metric-card strong {
-  font-size: clamp(64px, 12vw, 116px);
-  line-height: 0.84;
+  font-size: clamp(46px, 14cqi, 82px);
+  line-height: 0.9;
   letter-spacing: 0;
   font-weight: 650;
 }
 
 .metric-card span {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   color: var(--green);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .trend-card {
   display: grid;
-  gap: 32px;
+  gap: 24px;
 }
 
 .mini-chart {
@@ -519,7 +520,7 @@ button {
 
 .ledger-card table {
   width: 100%;
-  margin-top: 28px;
+  margin-top: 22px;
   border-collapse: collapse;
 }
 
@@ -528,9 +529,9 @@ button {
 }
 
 .ledger-card td {
-  padding: 16px 0;
+  padding: 12px 0;
   color: #19191d;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .ledger-card td:not(:first-child) {
@@ -539,23 +540,23 @@ button {
 
 .source-list {
   display: grid;
-  gap: 8px;
-  margin-top: 24px;
+  gap: 6px;
+  margin-top: 18px;
 }
 
 .source-list a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 14px;
   color: inherit;
   text-decoration: none;
   border-top: 1px solid var(--line);
-  padding: 12px 0;
+  padding: 10px 0;
 }
 
 .source-card .widget-copy h1 {
-  font-size: clamp(30px, 4.8vw, 48px);
+  font-size: clamp(22px, 5.6cqi, 34px);
 }
 
 .source-list span {
@@ -567,7 +568,7 @@ button {
 .source-list strong {
   display: block;
   color: #111114;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.25;
 }
@@ -575,7 +576,7 @@ button {
 .source-list em {
   max-width: 480px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-style: normal;
   line-height: 1.35;
   overflow: hidden;
@@ -587,14 +588,14 @@ button {
 .source-list small {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .source-empty {
   border-top: 1px solid var(--line);
-  padding: 14px 0 0;
+  padding: 12px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .empty-widget {
