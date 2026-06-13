@@ -752,10 +752,24 @@ button {
 }
 
 .sending-dot {
-  width: 5px;
-  height: 5px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
-  background: currentColor;
+  border: 2px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-top-color: currentColor;
+  animation: shine-spin 0.7s linear infinite;
+}
+
+@keyframes shine-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sending-dot {
+    animation-duration: 1.4s;
+  }
 }
 
 .composer button:disabled {
