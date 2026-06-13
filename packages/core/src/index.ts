@@ -173,12 +173,15 @@ export type SignalScene = {
   hotspots: SceneHotspot[];
 };
 
+export type AgentRole = "curator" | "researcher" | "builder";
+
 export type Receipt = {
   tx: number;
   accepted: boolean;
   code: string;
   message: string;
   at: string;
+  role?: AgentRole | null;
 };
 
 export type TimelineItem = {

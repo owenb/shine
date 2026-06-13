@@ -21,6 +21,7 @@ import {
   isWorldId,
   normalizeWidgetFrame,
   worlds,
+  type AgentRole,
   type Receipt,
   type WidgetFrame,
   type WorldId,
@@ -28,6 +29,7 @@ import {
 } from "@sig/core";
 import { FabricSurface } from "./FabricSurface";
 import { VoiceSurface } from "./VoiceSurface";
+import shineLogo from "./assets/shine-logo.png";
 
 const worldLabels: Record<WorldId, string> = {
   "world-a": "World A",
@@ -38,6 +40,7 @@ type FlightEffect = {
   world: WorldId;
   tx: number;
   kind: string;
+  role?: AgentRole | null;
   input: unknown;
   output: unknown;
   reused: boolean;
@@ -270,8 +273,7 @@ function SignalApp() {
       >
         <header className="topbar">
           <div className="brand">
-            Signal UI
-            <span className={state?.redis.connected ? "memory-dot on" : "memory-dot"} />
+            <img src={shineLogo} alt="shine" className="brand-logo" />
           </div>
           <div className="world-toggle" aria-label="World">
             {worlds.map((id) => (
@@ -420,7 +422,10 @@ function FlightRecorderPanel({
       <div className="flight-list" aria-label="Receipts">
         {receipts.map((receipt) => (
           <div key={`${receipt.tx}-${receipt.code}`} className="flight-line">
-            <span>{receipt.code.replace(/_/g, " ").toLowerCase()}</span>
+            <span>
+              {receipt.role ? `${receipt.role} / ` : ""}
+              {receipt.code.replace(/_/g, " ").toLowerCase()}
+            </span>
             <strong>{String(receipt.tx).padStart(3, "0")}</strong>
           </div>
         ))}
@@ -429,7 +434,10 @@ function FlightRecorderPanel({
       <div className="flight-effects" aria-label="Effects">
         {effects.map((effect) => (
           <div key={`${effect.tx}-${effect.kind}-${effect.at}`} className="flight-line">
-            <span>{effect.kind.replace(/^gemini-/, "")}</span>
+            <span>
+              {effect.role ? `${effect.role} / ` : ""}
+              {effect.kind.replace(/^gemini-/, "")}
+            </span>
             <strong>{effect.reused ? "reused" : `tx ${String(effect.tx).padStart(3, "0")}`}</strong>
           </div>
         ))}

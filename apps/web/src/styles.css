@@ -71,10 +71,16 @@ button {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0;
+  width: 116px;
+  min-width: 116px;
+  pointer-events: none;
+}
+
+.brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  opacity: 0.3;
 }
 
 .memory-dot {

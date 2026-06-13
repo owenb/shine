@@ -35,6 +35,7 @@ import {
   isWorldId,
   normalizeWidgetFrame,
   worlds,
+  type AgentRole,
   type Grounding,
   type CommandInput,
   type DesktopLayout,
@@ -100,6 +101,8 @@ db.exec(`
 ensureColumn("effects", "world", "TEXT");
 ensureColumn("effects", "tx", "INTEGER");
 ensureColumn("effects", "reused_tx", "INTEGER");
+ensureColumn("effects", "role", "TEXT");
+ensureColumn("receipts", "role", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS effects_world_tx ON effects(world, tx);");
 
 type FactValue = string | number | boolean | object | null;
@@ -120,6 +123,7 @@ type MemoryContext = {
 type EffectUse = {
   key: string;
   reused: boolean;
+  role?: AgentRole;
 };
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -487,6 +491,15 @@ async function* runSignalBuilderAgent(input: RunAgentInput): AsyncIterable<BaseE
   };
 
   const receipt = await applyAgentCommand({ world, prompt, source: "copilotkit" });
+  const roleReceipts = getReceiptsForTx(world, receipt.tx);
+  for (const roleReceipt of roleReceipts) {
+    if (!roleReceipt.role) continue;
+    yield {
+      type: EventType.CUSTOM,
+      name: roleEventName(roleReceipt),
+      value: { world, tx: roleReceipt.tx, receipt: roleReceipt },
+    };
+  }
   const state = getWorldState(world, receipt.tx);
 
   yield {
@@ -537,6 +550,10 @@ async function applySignalCommand({
     key: keyof WorldPreferences;
     value: string;
   }> = [];
+  const learnedChanges: Array<{
+    key: keyof WorldPreferences;
+    value: string;
+  }> = [];
 
   if (signal.type === "setPreference") {
     preferenceChanges.push({ key: signal.key, value: signal.value });
@@ -551,41 +568,79 @@ async function applySignalCommand({
     if (change.key === "presentation" && isPresentation(change.value)) {
       nextPrefs.presentation = change.value;
       await remember(input.world, tx, change.key, change.value);
+      learnedChanges.push(change);
     }
     if (change.key === "tone" && isTone(change.value)) {
       nextPrefs.tone = change.value;
       await remember(input.world, tx, change.key, change.value);
+      learnedChanges.push(change);
     }
     if (change.key === "renderer" && isRenderer(change.value)) {
       nextPrefs.renderer = change.value;
       await remember(input.world, tx, change.key, change.value);
+      learnedChanges.push(change);
     }
     if (change.key === "component" && isComponent(change.value)) {
       nextPrefs.component = change.value;
       const hash = insertComponentBlob(change.value);
       insertFact(tx, input.world, "world", "codePin", hash);
       await remember(input.world, tx, change.key, change.value);
+      learnedChanges.push(change);
     }
   }
 
-  if (preferenceChanges.length) {
+  if (learnedChanges.length) {
     insertFact(tx, input.world, "world", "preferences", nextPrefs);
   }
 
-  const surface = composeSurface(input.world, nextPrefs, signal, tx, grounding);
-  insertFact(tx, input.world, "surface", "current", surface);
-  insertFact(tx, input.world, "agent", "last", agent);
   const curatorReceipt = insertReceipt(
     tx,
     input.world,
     true,
-    preferenceChanges.length ? "CURATOR_LEARNED" : memoryContext ? "CURATOR_RECALLED" : "CURATOR_READY",
-    preferenceChanges.length
-      ? `Curator learned ${preferenceChanges.map((change) => `${change.key}=${change.value}`).join(", ")}; Builder re-rendered.`
+    learnedChanges.length ? "CURATOR_LEARNED" : memoryContext ? "CURATOR_RECALLED" : "CURATOR_READY",
+    learnedChanges.length
+      ? `Curator learned ${learnedChanges.map((change) => `${change.key}=${change.value}`).join(", ")}.`
       : memoryContext
         ? `Curator recalled ${memoryContext.memories.length} ${memoryContext.provider} memories.`
         : "Curator accepted the Gemini signal.",
+    "curator",
   );
+  await writeRedisStream("curator", {
+    world: input.world,
+    tx,
+    role: "curator",
+    code: curatorReceipt.code,
+    learned: learnedChanges,
+    memoryProvider: memoryContext?.provider,
+    memoryCount: memoryContext?.memories.length ?? 0,
+  });
+
+  let researcherReceipt: Receipt | undefined;
+  if (grounding) {
+    insertFact(tx, input.world, "researcher", "grounding", grounding);
+    await writeResearchWorkingMemory(input.world, tx, grounding);
+    researcherReceipt = insertReceipt(
+      tx,
+      input.world,
+      true,
+      "RESEARCHER_GROUNDED",
+      `Researcher grounded ${grounding.sources.length} LinkUp sources.`,
+      "researcher",
+    );
+    await writeRedisStream("researcher", {
+      world: input.world,
+      tx,
+      role: "researcher",
+      code: researcherReceipt.code,
+      sourceCount: grounding.sources.length,
+      reused: grounding.reused,
+    });
+  }
+
+  const builderGrounding = grounding ? getLatestResearchGrounding(input.world, tx) ?? grounding : undefined;
+  const surface = composeSurface(input.world, nextPrefs, signal, tx, builderGrounding);
+  insertFact(tx, input.world, "surface", "current", surface);
+  insertFact(tx, input.world, "agent", "last", agent);
   const receipt = insertReceipt(
     tx,
     input.world,
@@ -594,26 +649,41 @@ async function applySignalCommand({
     agent.grounded
       ? "Builder rendered a LinkUp-grounded A2UI surface."
       : "Builder compiled the Gemini signal through Loom into A2UI.",
+    "builder",
   );
   const state = getWorldState(input.world, tx);
-  await writeRedisStream("receipt", {
+  await writeRedisStream("builder", {
     world: input.world,
     tx,
-    code: curatorReceipt.code,
-    provider: agent.provider,
-    reused: agent.reused,
-    grounded: agent.grounded,
-  });
-  await writeRedisStream("receipt", {
-    world: input.world,
-    tx,
+    role: "builder",
     code: receipt.code,
     provider: agent.provider,
     reused: agent.reused,
     grounded: agent.grounded,
+    readResearch: Boolean(builderGrounding),
+    readMemory: memoryContext?.memories.length ?? 0,
+  });
+  await writeRedisStream("receipt", {
+    world: input.world,
+    tx,
+    receipts: [curatorReceipt, researcherReceipt, receipt].filter(Boolean),
   });
   broadcast(input.world, state);
   return receipt;
+}
+
+function getLatestResearchGrounding(world: WorldId, tx: number): Grounding | undefined {
+  const row = db
+    .prepare(
+      `SELECT value
+       FROM facts
+       WHERE world = ? AND entity = 'researcher' AND attr = 'grounding' AND tx <= ?
+       ORDER BY tx DESC
+       LIMIT 1`,
+    )
+    .get(world, tx) as { value: string } | undefined;
+  if (!row) return undefined;
+  return cleanGrounding(JSON.parse(row.value) as Grounding);
 }
 
 function extractCopilotWorld(input: RunAgentInput): WorldId {
@@ -722,7 +792,7 @@ function normalizeDesktopLayout(world: WorldId, value: FactValue): DesktopLayout
 function getReceipts(world: WorldId, atTx: number): Receipt[] {
   return db
     .prepare(
-      `SELECT tx, accepted, code, message, created_at AS at
+      `SELECT tx, accepted, code, message, created_at AS at, role
        FROM receipts
        WHERE world = ? AND tx <= ?
        ORDER BY tx DESC
@@ -733,6 +803,31 @@ function getReceipts(world: WorldId, atTx: number): Receipt[] {
       ...(row as Omit<Receipt, "accepted"> & { accepted: number }),
       accepted: Boolean((row as { accepted: number }).accepted),
     }));
+}
+
+function getReceiptsForTx(world: WorldId, tx: number): Receipt[] {
+  return db
+    .prepare(
+      `SELECT tx, accepted, code, message, created_at AS at, role
+       FROM receipts
+       WHERE world = ? AND tx = ?
+       ORDER BY rowid ASC`,
+    )
+    .all(world, tx)
+    .map((row) => ({
+      ...(row as Omit<Receipt, "accepted"> & { accepted: number }),
+      accepted: Boolean((row as { accepted: number }).accepted),
+    }));
+}
+
+function roleEventName(receipt: Receipt) {
+  if (receipt.role === "curator") {
+    if (receipt.code === "CURATOR_LEARNED") return "signal.curator.learned";
+    if (receipt.code === "CURATOR_RECALLED") return "signal.curator.recalled";
+    return "signal.curator.ready";
+  }
+  if (receipt.role === "researcher") return "signal.researcher.grounded";
+  return "signal.builder.rendered";
 }
 
 function getTxDetail(tx: number) {
@@ -746,7 +841,7 @@ function getTxDetail(tx: number) {
     }));
   const receipts = db
     .prepare(
-      "SELECT tx, world, accepted, code, message, created_at AS at FROM receipts WHERE tx = ? ORDER BY rowid ASC",
+      "SELECT tx, world, accepted, code, message, created_at AS at, role FROM receipts WHERE tx = ? ORDER BY rowid ASC",
     )
     .all(tx)
     .map((row) => ({
@@ -761,7 +856,7 @@ function getFlightRecorder(world: WorldId, atTx?: number) {
   const selectedTx = atTx ?? headTx;
   const receipts = db
     .prepare(
-      `SELECT receipts.tx, receipts.accepted, receipts.code, receipts.message, receipts.created_at AS at, txs.summary
+      `SELECT receipts.tx, receipts.accepted, receipts.code, receipts.message, receipts.created_at AS at, receipts.role, txs.summary
        FROM receipts
        JOIN txs ON txs.id = receipts.tx
        WHERE receipts.world = ? AND receipts.tx <= ?
@@ -775,7 +870,7 @@ function getFlightRecorder(world: WorldId, atTx?: number) {
     }));
   const effects = db
     .prepare(
-      `SELECT world, tx, kind, input, output, reused, reused_tx, created_at AS at
+      `SELECT world, tx, kind, input, output, reused, reused_tx, role, created_at AS at
        FROM effects
        WHERE world = ? AND tx IS NOT NULL AND tx <= ?
        ORDER BY tx DESC, created_at DESC
@@ -786,6 +881,7 @@ function getFlightRecorder(world: WorldId, atTx?: number) {
       world: (row as { world: string }).world,
       tx: (row as { tx: number }).tx,
       kind: (row as { kind: string }).kind,
+      role: (row as { role: AgentRole | null }).role,
       input: JSON.parse((row as { input: string }).input),
       output: JSON.parse((row as { output: string }).output),
       reused: Boolean((row as { reused: number; reused_tx: number | null }).reused) &&
@@ -817,7 +913,7 @@ function getHeadTx(world: WorldId): number {
   return row.tx;
 }
 
-function ensureColumn(table: "effects", column: string, definition: string) {
+function ensureColumn(table: "effects" | "receipts", column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (columns.some((item) => item.name === column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -846,12 +942,13 @@ function insertReceipt(
   accepted: boolean,
   code: string,
   message: string,
+  role?: AgentRole,
 ): Receipt {
   const at = new Date().toISOString();
   db.prepare(
-    "INSERT INTO receipts (tx, world, accepted, code, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(tx, world, accepted ? 1 : 0, code, message, at);
-  return { tx, accepted, code, message, at };
+    "INSERT INTO receipts (tx, world, accepted, code, message, created_at, role) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(tx, world, accepted ? 1 : 0, code, message, at, role ?? null);
+  return { tx, accepted, code, message, at, role: role ?? null };
 }
 
 function insertBlob(hash: string, body: string) {
@@ -900,7 +997,7 @@ async function resolveSignal(world: WorldId, prompt: string, memoryContext?: Mem
       provider: "gemini",
       model: geminiModel,
       reused: true,
-      effect: { key: cached.key, reused: cached.reused },
+      effect: { key: cached.key, reused: cached.reused, role: "builder" },
     };
   }
 
@@ -944,7 +1041,10 @@ async function resolveSignal(world: WorldId, prompt: string, memoryContext?: Mem
     const text = response.text ?? "{}";
     const parsed = JSON.parse(text) as Partial<SignalPacket>;
     const signal = normalizeGeminiSignal(parsed, prompt);
-    const effect = await cacheEffect("gemini-signal", signalCacheInput, { signal }, false, { world });
+    const effect = await cacheEffect("gemini-signal", signalCacheInput, { signal }, false, {
+      world,
+      role: "builder",
+    });
     return { signal, provider: "gemini", model: geminiModel, reused: false, effect };
   } catch (error) {
     await cacheEffect(
@@ -952,7 +1052,7 @@ async function resolveSignal(world: WorldId, prompt: string, memoryContext?: Mem
       signalCacheInput,
       { message: error instanceof Error ? error.message : String(error) },
       false,
-      { world },
+      { world, role: "builder" },
     );
     throw error;
   }
@@ -969,7 +1069,7 @@ async function resolveGrounding(
   if (cached) {
     return {
       grounding: cleanGrounding({ ...cached.output, reused: true }),
-      effect: { key: cached.key, reused: cached.reused },
+      effect: { key: cached.key, reused: cached.reused, role: "researcher" },
     };
   }
 
@@ -990,7 +1090,10 @@ async function resolveGrounding(
         snippet: source.snippet ? cleanLinkupText(source.snippet) : undefined,
       })),
     };
-    const effect = await cacheEffect("linkup-grounding", input, grounding, false, { world });
+    const effect = await cacheEffect("linkup-grounding", input, grounding, false, {
+      world,
+      role: "researcher",
+    });
     return { grounding, effect };
   } catch (error) {
     await cacheEffect(
@@ -998,7 +1101,7 @@ async function resolveGrounding(
       input,
       { message: error instanceof Error ? error.message : String(error) },
       false,
-      { world },
+      { world, role: "researcher" },
     );
     throw error;
   }
@@ -1116,13 +1219,13 @@ async function cacheEffect(
   input: object,
   output: unknown,
   reused: boolean,
-  meta: { world?: WorldId; tx?: number } = {},
+  meta: { world?: WorldId; tx?: number; role?: AgentRole } = {},
 ): Promise<EffectUse> {
   const key = effectKey(kind, input);
   const encodedOutput = JSON.stringify(output);
   db.prepare(
-    `INSERT INTO effects (key, kind, input, output, reused, created_at, world, tx, reused_tx)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO effects (key, kind, input, output, reused, created_at, world, tx, reused_tx, role)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET
        kind = excluded.kind,
        input = excluded.input,
@@ -1130,7 +1233,8 @@ async function cacheEffect(
        reused = CASE WHEN effects.reused = 1 OR excluded.reused = 1 THEN 1 ELSE 0 END,
        world = COALESCE(excluded.world, effects.world),
        tx = COALESCE(effects.tx, excluded.tx),
-       reused_tx = COALESCE(effects.reused_tx, excluded.reused_tx)`,
+       reused_tx = COALESCE(effects.reused_tx, excluded.reused_tx),
+       role = COALESCE(excluded.role, effects.role)`,
   ).run(
     key,
     kind,
@@ -1141,12 +1245,13 @@ async function cacheEffect(
     meta.world ?? null,
     meta.tx ?? null,
     reused && meta.tx ? meta.tx : null,
+    meta.role ?? null,
   );
   if (redis.client && redis.connected) {
     await redis.client.set(`signal:effect:${key}`, encodedOutput);
   }
   await writeRedisStream("effect", { kind, key, reused });
-  return { key, reused };
+  return { key, reused, role: meta.role };
 }
 
 async function markEffectReused(kind: string, key: string) {
@@ -1160,6 +1265,7 @@ async function annotateEffectUses(effects: EffectUse[], world: WorldId, tx: numb
     `UPDATE effects
      SET world = COALESCE(world, ?),
          tx = COALESCE(tx, ?),
+         role = COALESCE(role, ?),
          reused_tx = CASE
            WHEN ? = 1 THEN COALESCE(reused_tx, ?)
            ELSE reused_tx
@@ -1167,7 +1273,7 @@ async function annotateEffectUses(effects: EffectUse[], world: WorldId, tx: numb
      WHERE key = ?`,
   );
   for (const effect of effects) {
-    statement.run(world, tx, effect.reused ? 1 : 0, tx, effect.key);
+    statement.run(world, tx, effect.role ?? null, effect.reused ? 1 : 0, tx, effect.key);
   }
 }
 
@@ -1220,7 +1326,7 @@ async function remember(world: WorldId, tx: number, key: string, value: string) 
       provider: agentMemoryStatus.connected ? "iris" : "redis-hash",
     },
     false,
-    { world, tx },
+    { world, tx, role: "curator" },
   );
   if (!redis.client || !redis.connected) return;
   await redis.client.hSet(`signal:memory:${world}`, key, value);
@@ -1258,6 +1364,29 @@ async function writeAgentMemory(world: WorldId, key: string, value: string) {
   }
 }
 
+async function writeResearchWorkingMemory(world: WorldId, tx: number, grounding: Grounding) {
+  if (!agentMemory || !agentMemoryStatus.connected) return;
+  try {
+    await agentMemory.putWorkingMemory(
+      `signal:${world}:research`,
+      {
+        user_id: world,
+        namespace: agentMemoryNamespace,
+        data: {
+          tx,
+          answer: grounding.answer,
+          sources: grounding.sources,
+        },
+      },
+      { namespace: agentMemoryNamespace, background: true },
+    );
+  } catch (error) {
+    agentMemoryStatus.connected = false;
+    agentMemoryStatus.error = error instanceof Error ? error.message : String(error);
+    console.warn("[agent-memory] research write skipped:", agentMemoryStatus.error);
+  }
+}
+
 async function retrieveMemoryContext(world: WorldId, prompt: string): Promise<MemoryContext | undefined> {
   if (agentMemory && agentMemoryStatus.connected) {
     try {
@@ -1275,7 +1404,7 @@ async function retrieveMemoryContext(world: WorldId, prompt: string): Promise<Me
           { world, prompt, provider: "iris" },
           { provider: "iris", memories },
           false,
-          { world },
+          { world, role: "builder" },
         );
         const context: MemoryContext = { provider: "iris", memories, effects: [effect] };
         return context;
@@ -1296,7 +1425,7 @@ async function retrieveMemoryContext(world: WorldId, prompt: string): Promise<Me
     { world, prompt, provider: "redis-hash" },
     { provider: "redis-hash", memories },
     false,
-    { world },
+    { world, role: "builder" },
   );
   const context: MemoryContext = { provider: "redis-hash", memories, effects: [effect] };
   return context;
