@@ -207,8 +207,18 @@ app.post("/api/agent", async (c) => {
   if (!parsed.success) {
     return c.json({ error: "Invalid command", details: parsed.error.flatten() }, 400);
   }
-  const receipt = await applyAgentCommand({ ...parsed.data, source: "composer" });
-  return c.json(getWorldState(parsed.data.world, receipt.tx));
+  try {
+    const receipt = await applyAgentCommand({ ...parsed.data, source: "composer" });
+    return c.json(getWorldState(parsed.data.world, receipt.tx));
+  } catch (error) {
+    return c.json(
+      {
+        error: "Gemini signal generation failed",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      502,
+    );
+  }
 });
 
 app.post("/api/reset", async (c) => {
@@ -585,20 +595,20 @@ function insertComponentBlob(variant: WorldPreferences["component"]) {
 
 async function resolveSignal(prompt: string): Promise<{
   signal: SignalPacket;
-  provider: "gemini" | "heuristic";
+  provider: "gemini";
   model: string;
   reused: boolean;
 }> {
-  const fallback = signalFromPrompt(prompt);
   if (!gemini) {
-    return { signal: fallback, provider: "heuristic", model: "local-signal", reused: false };
+    throw new Error("GEMINI_API_KEY is not configured");
   }
 
   const signalCacheInput = { prompt, model: geminiModel, vertexai: geminiVertexai };
   const cached = await getCachedEffect<{ signal: SignalPacket }>("gemini-signal", signalCacheInput);
   if (cached) {
+    const signal = normalizeGeminiSignal(cached.output.signal, prompt);
     return {
-      signal: cached.output.signal,
+      signal,
       provider: "gemini",
       model: geminiModel,
       reused: true,
@@ -641,7 +651,7 @@ async function resolveSignal(prompt: string): Promise<{
     });
     const text = response.text ?? "{}";
     const parsed = JSON.parse(text) as Partial<SignalPacket>;
-    const signal = normalizeGeminiSignal(parsed, prompt, fallback);
+    const signal = normalizeGeminiSignal(parsed, prompt);
     await cacheEffect("gemini-signal", signalCacheInput, { signal }, false);
     return { signal, provider: "gemini", model: geminiModel, reused: false };
   } catch (error) {
@@ -651,7 +661,7 @@ async function resolveSignal(prompt: string): Promise<{
       { message: error instanceof Error ? error.message : String(error) },
       false,
     );
-    return { signal: fallback, provider: "heuristic", model: "local-signal", reused: false };
+    throw error;
   }
 }
 
@@ -869,14 +879,13 @@ function preferenceHintsFromPrompt(prompt: string): Array<{ key: keyof WorldPref
 function normalizeGeminiSignal(
   parsed: Partial<SignalPacket>,
   prompt: string,
-  fallback: SignalPacket,
 ): SignalPacket {
   if (parsed.type === "renderWidget" && isRenderIntent(parsed.intent)) {
     return { type: "renderWidget", intent: parsed.intent, prompt };
   }
 
   if (parsed.type !== "setPreference" || !parsed.key || typeof parsed.value !== "string") {
-    return fallback;
+    throw new Error(`Gemini returned an invalid Signal packet: ${JSON.stringify(parsed)}`);
   }
 
   if (parsed.key === "presentation" && isPresentation(parsed.value)) {
@@ -892,7 +901,7 @@ function normalizeGeminiSignal(
     return { type: "setPreference", key: parsed.key, value: parsed.value, prompt };
   }
 
-  return fallback;
+  throw new Error(`Gemini returned an unsupported preference: ${JSON.stringify(parsed)}`);
 }
 
 function isRenderIntent(value: unknown): value is Extract<SignalPacket, { type: "renderWidget" }>["intent"] {

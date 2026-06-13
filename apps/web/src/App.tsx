@@ -17,6 +17,7 @@ export function App() {
   const [atTx, setAtTx] = useState<number | null>(null);
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [componentStyle, setComponentStyle] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
@@ -84,15 +85,23 @@ export function App() {
     const trimmed = prompt.trim();
     if (!trimmed || busy) return;
     setBusy(true);
+    setError(null);
     setPrompt("");
     try {
-      const next = await fetch("/api/agent", {
+      const response = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ world, prompt: trimmed }),
-      }).then((res) => res.json() as Promise<WorldState>);
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { details?: string; error?: string } | null;
+        throw new Error(body?.details ?? body?.error ?? `Request failed with ${response.status}`);
+      }
+      const next = (await response.json()) as WorldState;
       setAtTx(null);
       setState(next);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : String(submitError));
     } finally {
       setBusy(false);
     }
@@ -163,6 +172,8 @@ export function App() {
               )}
             </button>
           </div>
+
+          {error ? <p className="composer-error">Gemini failed: {error}</p> : null}
 
           <div className="scrubber">
             <span>{state?.surface?.data.txLabel ?? "tx 000"}</span>
