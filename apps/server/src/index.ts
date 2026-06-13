@@ -551,6 +551,8 @@ async function applySignalCommand({
 }): Promise<CommandResult> {
   const nextPrefs = { ...getCurrentPreferences(input.world) };
   const tx = insertTx(input.world, summarize(input.prompt));
+  const currentState = getWorldState(input.world, tx - 1);
+  const currentLayout = getCurrentLayout(input.world);
   await annotateEffectUses(effects ?? [], input.world, tx);
   const preferenceChanges: Array<{
     key: keyof WorldPreferences;
@@ -643,7 +645,23 @@ async function applySignalCommand({
   }
 
   const builderGrounding = grounding ? getLatestResearchGrounding(input.world, tx) ?? grounding : undefined;
-  const surface = composeSurface(input.world, nextPrefs, signal, tx, builderGrounding);
+  const createsWidget = signal.type === "renderWidget";
+  const surfaceId = createsWidget
+    ? createSurfaceId(tx)
+    : currentState.surface?.surfaceId ?? createSurfaceId(tx);
+  const surface = composeSurface(input.world, nextPrefs, signal, tx, builderGrounding, surfaceId);
+  const nextLayout = createsWidget || !currentLayout.widgets[surfaceId]
+    ? {
+        widgets: {
+          ...currentLayout.widgets,
+          [surfaceId]: findOpenWidgetFrame(currentLayout, surface.kind),
+        },
+      }
+    : currentLayout;
+  if (nextLayout !== currentLayout) {
+    insertFact(tx, input.world, "layout", "desktop", nextLayout);
+  }
+  insertFact(tx, input.world, "surface", `instance:${surface.surfaceId}`, surface);
   insertFact(tx, input.world, "surface", "current", surface);
   insertFact(tx, input.world, "agent", "last", agent);
   const receipt = insertReceipt(
