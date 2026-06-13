@@ -26,14 +26,19 @@ import { cors } from "hono/cors";
 import {
   CATALOG_ID,
   CommandSchema,
+  LayoutPatchSchema,
   SURFACE_ID,
   composeSurface,
   composeScene,
+  defaultDesktopLayout,
   defaultPreferences,
   isWorldId,
+  normalizeWidgetFrame,
   worlds,
   type Grounding,
   type CommandInput,
+  type DesktopLayout,
+  type LayoutPatchInput,
   type Receipt,
   type SignalSurface,
   type SignalPacket,
@@ -261,6 +266,16 @@ app.post("/api/agent", async (c) => {
   }
 });
 
+app.post("/api/layout", async (c) => {
+  const raw = await c.req.json().catch(() => null);
+  const parsed = LayoutPatchSchema.safeParse(raw);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid layout patch", details: parsed.error.flatten() }, 400);
+  }
+  const receipt = await applyLayoutPatch(parsed.data);
+  return c.json(getWorldState(parsed.data.world, receipt.tx));
+});
+
 app.post("/api/tts", async (c) => {
   const raw = (await c.req.json().catch(() => null)) as
     | { text?: unknown; voice?: unknown }
@@ -380,6 +395,7 @@ function seedIfEmpty() {
     const tx = insertTx(world, "Created world");
     insertFact(tx, world, "world", "preferences", prefs);
     insertFact(tx, world, "world", "codePin", codeHash);
+    insertFact(tx, world, "layout", "desktop", defaultDesktopLayout(world));
     insertReceipt(tx, world, true, "WORLD_CREATED", `Seeded ${world}`);
 
     const surfaceTx = insertTx(world, "Rendered first widget");
@@ -425,6 +441,35 @@ async function applyAgentCommand(input: CommandInput): Promise<Receipt> {
         : undefined,
     },
   });
+}
+
+async function applyLayoutPatch(input: LayoutPatchInput): Promise<Receipt> {
+  const current = getWorldState(input.world);
+  const frame = normalizeWidgetFrame(input.frame);
+  const layout: DesktopLayout = {
+    widgets: {
+      ...current.layout.widgets,
+      [input.surfaceId]: frame,
+    },
+  };
+  const tx = insertTx(input.world, `Moved ${input.surfaceId} widget`);
+  insertFact(tx, input.world, "layout", "desktop", layout);
+  const receipt = insertReceipt(
+    tx,
+    input.world,
+    true,
+    "LAYOUT_UPDATED",
+    `Stored ${input.surfaceId} frame for ${input.world}.`,
+  );
+  await writeRedisStream("layout", {
+    world: input.world,
+    tx,
+    surfaceId: input.surfaceId,
+    frame,
+  });
+  const state = getWorldState(input.world, tx);
+  broadcast(input.world, state);
+  return receipt;
 }
 
 async function* runSignalBuilderAgent(input: RunAgentInput): AsyncIterable<BaseEvent> {
@@ -604,6 +649,7 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
     .all(world, selectedTx) as Array<{ entity: string; attr: string; value: string }>;
 
   let preferences = defaultPreferences(world);
+  let layout = defaultDesktopLayout(world);
   let surface: SignalSurface | null = null;
   let codePin: string | null = null;
   let agent: WorldState["agent"] = null;
@@ -612,6 +658,9 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
     const value = JSON.parse(fact.value) as FactValue;
     if (fact.entity === "world" && fact.attr === "preferences") {
       preferences = { ...preferences, ...(value as Partial<WorldPreferences>) };
+    }
+    if (fact.entity === "layout" && fact.attr === "desktop") {
+      layout = normalizeDesktopLayout(world, value);
     }
     if (fact.entity === "surface" && fact.attr === "current") {
       surface = value as SignalSurface;
@@ -634,6 +683,7 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
     timeline: getTimeline(world),
     receipts: getReceipts(world, selectedTx),
     componentModule: codePin ? getBlob(codePin) : null,
+    layout,
     agent,
     redis: {
       configured: redis.configured,
@@ -651,6 +701,22 @@ function getTimeline(world: WorldId): TimelineItem[] {
   return db
     .prepare("SELECT id AS tx, summary, created_at AS at FROM txs WHERE world = ? ORDER BY id ASC")
     .all(world) as TimelineItem[];
+}
+
+function normalizeDesktopLayout(world: WorldId, value: FactValue): DesktopLayout {
+  const fallback = defaultDesktopLayout(world);
+  if (!value || typeof value !== "object" || !("widgets" in value)) return fallback;
+  const widgets = (value as { widgets?: unknown }).widgets;
+  if (!widgets || typeof widgets !== "object") return fallback;
+
+  const normalized: DesktopLayout = { widgets: { ...fallback.widgets } };
+  for (const [surfaceId, rawFrame] of Object.entries(widgets as Record<string, unknown>)) {
+    const parsed = LayoutPatchSchema.shape.frame.safeParse(rawFrame);
+    if (parsed.success) {
+      normalized.widgets[surfaceId] = normalizeWidgetFrame(parsed.data);
+    }
+  }
+  return normalized;
 }
 
 function getReceipts(world: WorldId, atTx: number): Receipt[] {

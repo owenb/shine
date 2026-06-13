@@ -6,6 +6,8 @@
 
 **Shine is SaaS 2.0:** the data stays constant, and *everything on top* — your dashboard, your theme, your layout, your components, even your rendering engine — is generated per‑user by an agent, and rewindable to any moment in time.
 
+No fixed UI. No DB migrations. No Git required.
+
 <br/>
 
 ![CopilotKit](https://img.shields.io/badge/CopilotKit-v2-111114?style=for-the-badge)
@@ -15,13 +17,13 @@
 ![Redis](https://img.shields.io/badge/Redis-Agent%20Memory-DC382D?style=for-the-badge)
 ![LinkUp](https://img.shields.io/badge/LinkUp-web%20grounding-7c5cff?style=for-the-badge)
 
-*Built for the London A2A & A2UI (Generative UI) Hackathon.*
+*Built for the London A2A & A2UI (Generative UI) Hackathon — June 2026.*
 
 </div>
 
 ---
 
-## The one idea
+## The big idea
 
 > **Facts are truth. Everything you see is derived.**
 >
@@ -37,15 +39,15 @@ Most "agent UI" is one of two weak extremes: **plain chat** (safe, useless) or *
 Every user is a **"world"** layered over a shared, immutable fact log. The *same* request produces a *visibly different* app per user — different theme, density, component variants, even a different **renderer** — because the compiler reads each world's facts before it builds. The data is shared and constant; the experience is entirely yours.
 
 ### 🗣️ The agent speaks *intent*, not pixels
-The model emits a tiny **Signal** wire‑protocol (e.g. "render a competitor panel", "I prefer tables", "switch to the cloth renderer"). A deterministic **compile + layout** step ("Loom") turns intent into a canonical **A2UI v0.9** document. The agent can never inject HTML, CSS, JS, or iframes — it can only request *approved* components, validated by a Zod gate before anything renders.
+The model emits a tiny **Signal** wire‑protocol (e.g. "render a competitor panel", "I prefer tables", "switch to the cloth renderer"). A deterministic **compile + layout** step ("Loom") turns intent into a canonical **A2UI v0.9** document. The agent can never inject HTML, CSS, JS, or iframes — it can only request *approved* components, validated by a Zod gate before anything renders. This gives you the most of the freedom of unrestricted UI, with safe guardrails (no raw HTML/JS).
 
 ### 🪟 Renderers are equals — one UI, many lenses
 The same validated UI is rendered three radically different ways, all from one shared **Scene**:
-- **DOM** — a clean, branded surface via the real `@copilotkit/a2ui-renderer`.
-- **Fabric** — a live **WebGL cloth** you can grab, wobble, and click. Clicks raycast the *deformed* mesh back through UV → hotspot → action.
+- **DOM** — a clean, branded surface via the real `@copilotkit/a2ui-renderer`, with a slow liquid sway that quietly settles under `prefers-reduced-motion`.
+- **Fabric** — a live, high‑res **WebGL cloth** (anisotropic‑filtered texture) you can grab, wobble, and click. Clicks raycast the *deformed* mesh back through UV → hotspot → action.
 - **Voice** — the panel projected into a ranked brief and spoken with **Gemini TTS**.
 
-Swap the engine, keep the data. *One Signal, three renderers.*
+Press **`R`** to cycle the lens (DOM → Cloth → Voice); an agent *"switch renderer"* command or a world switch hands control straight back to the agent. Swap the engine, keep the data. *One Signal, three renderers.*
 
 ### ⏳ Time‑travel and infinite undo, built in
 Because state is an append‑only log, **drag a slider to see any user's app at any moment in its history.** Scrubbing is buttery (every transaction is client‑cached, no refetch). Nothing is ever lost; every change is attributed in a **Flight Recorder** of receipts — who asked for what, what compiled, what the agent grounded.
@@ -97,7 +99,7 @@ flowchart LR
 
 - **[CopilotKit](https://copilotkit.ai) v2** — the chat + runtime. The UI drives an in‑process `BuiltInAgent` end‑to‑end via `useAgent` (no REST bypass), served natively on **Hono**.
 - **[AG-UI](https://docs.ag-ui.com)** — the transport. The agent streams `CUSTOM` + `STATE_SNAPSHOT` + `TEXT_MESSAGE_*` events the frontend consumes.
-- **[A2UI v0.9](https://a2ui.org)** — the canonical UI protocol. Hand‑authored ops match `@a2ui/web_core` field‑for‑field and render through the real `@copilotkit/a2ui-renderer` catalog.
+- **[A2UI v0.9](https://a2ui.org)** — the canonical UI protocol. Our ops match `@a2ui/web_core` field‑for‑field and render through the real `@copilotkit/a2ui-renderer`. The **full standard A2UI catalog is enabled** (`includeBasicCatalog: true`), so the renderer paints *anything* a future agent — or an **A2A partner** — sends, not just our five custom components.
 - **[Gemini](https://aistudio.google.com)** — `gemini-3.1-flash-lite` compiles Signal. If Gemini fails, the command fails; there is no heuristic fallback. Gemini TTS speaks the voice lens.
 - **[Redis](https://redis.io/iris)** — Agent Memory (`agent-memory-client`), effect/semantic cache, Streams event bus, pub/sub.
 - **[LinkUp](https://www.linkup.so)** — sourced, cited web answers piped into A2UI panels when `LINKUP_API_KEY` is set; without it the app shows an honest ungrounded state.
@@ -112,7 +114,7 @@ flowchart LR
 3. **It learns** — "I prefer tables and a calmer palette" → it re‑composes and remembers (Redis).
 4. **It grounds** — ask a real‑world question → a sourced, cited panel materializes (LinkUp).
 5. **It rewinds** — drag the slider; the whole app rebuilds at any past transaction.
-6. **It transforms** — flip to the **cloth** lens; the same panel becomes a living surface you can grab and click. Or let it **narrate** itself.
+6. **It transforms** — press **`R`** to flip lenses: the same panel becomes a living **cloth** you can grab and click, or **narrates** itself with Gemini voice.
 
 ---
 

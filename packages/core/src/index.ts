@@ -13,6 +13,26 @@ export const CommandSchema = z.object({
 
 export type CommandInput = z.infer<typeof CommandSchema>;
 
+export const WidgetFrameSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  width: z.number().min(0.18).max(0.95),
+  height: z.number().min(0.2).max(0.9),
+});
+
+export const LayoutPatchSchema = z.object({
+  world: WorldIdSchema,
+  surfaceId: z.string().min(1).max(120),
+  frame: WidgetFrameSchema,
+});
+
+export type WidgetFrame = z.infer<typeof WidgetFrameSchema>;
+export type LayoutPatchInput = z.infer<typeof LayoutPatchSchema>;
+
+export type DesktopLayout = {
+  widgets: Record<string, WidgetFrame>;
+};
+
 export type SignalPacket =
   | {
       type: "renderWidget";
@@ -187,6 +207,7 @@ export type WorldState = {
     hash: string;
     body: string;
   } | null;
+  layout: DesktopLayout;
   agent: {
     provider: "gemini";
     model: string;
@@ -235,6 +256,32 @@ export function defaultPreferences(world: WorldId): WorldPreferences {
     renderer: "dom",
     component: "crystal",
   };
+}
+
+export function defaultDesktopLayout(world: WorldId): DesktopLayout {
+  return {
+    widgets: {
+      [SURFACE_ID]:
+        world === "world-b"
+          ? { x: 0.25, y: 0.12, width: 0.56, height: 0.54 }
+          : { x: 0.25, y: 0.16, width: 0.54, height: 0.5 },
+    },
+  };
+}
+
+export function normalizeWidgetFrame(frame: WidgetFrame): WidgetFrame {
+  const width = clamp(frame.width, 0.18, 0.95);
+  const height = clamp(frame.height, 0.2, 0.9);
+  return {
+    x: clamp(frame.x, 0, 1 - width),
+    y: clamp(frame.y, 0, 1 - height),
+    width,
+    height,
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 export function composeSurface(

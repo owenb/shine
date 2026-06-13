@@ -17,7 +17,15 @@ import {
   useCopilotKit,
 } from "@copilotkit/react-core/v2";
 import { signalCatalog } from "./a2ui-catalog";
-import { isWorldId, worlds, type Receipt, type WorldId, type WorldState } from "@sig/core";
+import {
+  isWorldId,
+  normalizeWidgetFrame,
+  worlds,
+  type Receipt,
+  type WidgetFrame,
+  type WorldId,
+  type WorldState,
+} from "@sig/core";
 import { FabricSurface } from "./FabricSurface";
 import { VoiceSurface } from "./VoiceSurface";
 
@@ -243,6 +251,17 @@ function SignalApp() {
     }
   }
 
+  const commitLayout = useCallback(
+    async (surfaceId: string, frame: WidgetFrame) => {
+      if (!state) return;
+      const next = await patchLayout(world, surfaceId, normalizeWidgetFrame(frame));
+      cacheWorldState(next);
+      setAtTx(null);
+      setState(next);
+    },
+    [cacheWorldState, state, world],
+  );
+
   return (
     <A2UIProvider catalog={signalCatalog}>
       <main
@@ -272,7 +291,7 @@ function SignalApp() {
         </header>
 
         <section className="canvas" aria-label="A2UI Surface">
-          <SurfaceSwitch state={state} />
+          <DesktopSurface state={state} onLayoutCommit={commitLayout} />
         </section>
 
         <FlightRecorderPanel state={state} flight={flight} />
@@ -302,7 +321,7 @@ function SignalApp() {
           {error ? <p className="composer-error">Agent failed: {error}</p> : null}
 
           <div className="scrubber">
-            <span>{state?.surface?.data.txLabel ?? "tx 000"}</span>
+            <span>tx {String(state?.selectedTx ?? 0).padStart(3, "0")}</span>
             <div
               className={scrubbing ? "scrub-track dragging" : "scrub-track"}
               role="slider"
@@ -436,25 +455,296 @@ function ProofBadge({
   );
 }
 
-function SurfaceSwitch({ state }: { state: WorldState | null }) {
+type WidgetGestureMode = "move" | "east" | "south" | "corner";
+
+type WidgetGesture = {
+  mode: WidgetGestureMode;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  frame: WidgetFrame;
+  desktopWidth: number;
+  desktopHeight: number;
+};
+
+function DraggableWidget({
+  surfaceId,
+  frame,
+  tx,
+  editable,
+  children,
+  onCommit,
+}: {
+  surfaceId: string;
+  frame: WidgetFrame;
+  tx: number;
+  editable: boolean;
+  children: ReactNode;
+  onCommit: (frame: WidgetFrame) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(() => normalizeWidgetFrame(frame));
+  const [activeMode, setActiveMode] = useState<WidgetGestureMode | null>(null);
+  const gesture = useRef<WidgetGesture | null>(null);
+  const cleanupGesture = useRef<(() => void) | null>(null);
+  const latestFrame = useRef(draft);
+
+  useEffect(() => {
+    if (gesture.current) return;
+    const next = normalizeWidgetFrame(frame);
+    latestFrame.current = next;
+    setDraft(next);
+  }, [frame.x, frame.y, frame.width, frame.height, surfaceId, tx]);
+
+  const updateDraft = useCallback((next: WidgetFrame) => {
+    const normalized = normalizeWidgetFrame(next);
+    latestFrame.current = normalized;
+    setDraft(normalized);
+  }, []);
+
+  const startGesture = useCallback(
+    (mode: WidgetGestureMode, event: PointerEvent<HTMLDivElement>) => {
+      if (!editable) return;
+      const desktop = event.currentTarget.closest(".canvas");
+      if (!(desktop instanceof HTMLElement)) return;
+      const rect = desktop.getBoundingClientRect();
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      gesture.current = {
+        mode,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        frame: latestFrame.current,
+        desktopWidth: Math.max(rect.width, 1),
+        desktopHeight: Math.max(rect.height, 1),
+      };
+      setActiveMode(mode);
+
+      const updateFromWindowPointer = (pointerEvent: globalThis.PointerEvent) => {
+        const current = gesture.current;
+        if (!current || current.pointerId !== pointerEvent.pointerId) return;
+        pointerEvent.preventDefault();
+        const dx = (pointerEvent.clientX - current.startX) / current.desktopWidth;
+        const dy = (pointerEvent.clientY - current.startY) / current.desktopHeight;
+        const next = { ...current.frame };
+
+        if (current.mode === "move") {
+          next.x += dx;
+          next.y += dy;
+        }
+        if (current.mode === "east" || current.mode === "corner") {
+          next.width += dx;
+        }
+        if (current.mode === "south" || current.mode === "corner") {
+          next.height += dy;
+        }
+
+        updateDraft(next);
+      };
+
+      const finishFromWindowPointer = (pointerEvent: globalThis.PointerEvent) => {
+        const current = gesture.current;
+        if (!current || current.pointerId !== pointerEvent.pointerId) return;
+        cleanupGesture.current?.();
+        cleanupGesture.current = null;
+        gesture.current = null;
+        setActiveMode(null);
+        const committed = latestFrame.current;
+        if (frameChanged(current.frame, committed)) {
+          void onCommit(committed).catch((error) => {
+            console.error("[layout] failed to persist widget frame", error);
+            updateDraft(current.frame);
+          });
+        }
+      };
+
+      cleanupGesture.current?.();
+      window.addEventListener("pointermove", updateFromWindowPointer);
+      window.addEventListener("pointerup", finishFromWindowPointer);
+      window.addEventListener("pointercancel", finishFromWindowPointer);
+      cleanupGesture.current = () => {
+        window.removeEventListener("pointermove", updateFromWindowPointer);
+        window.removeEventListener("pointerup", finishFromWindowPointer);
+        window.removeEventListener("pointercancel", finishFromWindowPointer);
+      };
+    },
+    [editable, onCommit, updateDraft],
+  );
+
+  useEffect(() => {
+    return () => {
+      cleanupGesture.current?.();
+    };
+  }, []);
+
+  const moveGesture = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const current = gesture.current;
+      if (!current || current.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      const dx = (event.clientX - current.startX) / current.desktopWidth;
+      const dy = (event.clientY - current.startY) / current.desktopHeight;
+      const next = { ...current.frame };
+
+      if (current.mode === "move") {
+        next.x += dx;
+        next.y += dy;
+      }
+      if (current.mode === "east" || current.mode === "corner") {
+        next.width += dx;
+      }
+      if (current.mode === "south" || current.mode === "corner") {
+        next.height += dy;
+      }
+
+      updateDraft(next);
+    },
+    [updateDraft],
+  );
+
+  const stopGesture = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const current = gesture.current;
+      if (!current || current.pointerId !== event.pointerId) return;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      cleanupGesture.current?.();
+      cleanupGesture.current = null;
+      gesture.current = null;
+      setActiveMode(null);
+      const committed = latestFrame.current;
+      if (frameChanged(current.frame, committed)) {
+        void onCommit(committed).catch((error) => {
+          console.error("[layout] failed to persist widget frame", error);
+          updateDraft(current.frame);
+        });
+      }
+    },
+    [onCommit, updateDraft],
+  );
+
+  const sharedGestureProps = {
+    onPointerMove: moveGesture,
+    onPointerUp: stopGesture,
+    onPointerCancel: stopGesture,
+  };
+
+  return (
+    <div
+      className={[
+        "desktop-widget",
+        activeMode ? "moving" : "",
+        editable ? "" : "locked",
+      ].filter(Boolean).join(" ")}
+      data-surface-id={surfaceId}
+      data-tx={tx}
+      data-editable={editable}
+      style={{
+        left: `${draft.x * 100}%`,
+        top: `${draft.y * 100}%`,
+        width: `${draft.width * 100}%`,
+        height: `${draft.height * 100}%`,
+      }}
+    >
+      <div className="widget-frame">
+        <div className="widget-content">{children}</div>
+        {editable ? (
+          <>
+            <div
+              className="widget-move-handle"
+              role="button"
+              tabIndex={0}
+              aria-label="Move widget"
+              onPointerDown={(event) => startGesture("move", event)}
+              {...sharedGestureProps}
+            />
+            <div
+              className="widget-resize-handle east"
+              aria-label="Stretch widget width"
+              onPointerDown={(event) => startGesture("east", event)}
+              {...sharedGestureProps}
+            />
+            <div
+              className="widget-resize-handle south"
+              aria-label="Stretch widget height"
+              onPointerDown={(event) => startGesture("south", event)}
+              {...sharedGestureProps}
+            />
+            <div
+              className="widget-resize-handle corner"
+              aria-label="Resize widget"
+              onPointerDown={(event) => startGesture("corner", event)}
+              {...sharedGestureProps}
+            />
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function frameChanged(first: WidgetFrame, second: WidgetFrame) {
+  return (
+    Math.abs(first.x - second.x) > 0.001 ||
+    Math.abs(first.y - second.y) > 0.001 ||
+    Math.abs(first.width - second.width) > 0.001 ||
+    Math.abs(first.height - second.height) > 0.001
+  );
+}
+
+function DesktopSurface({
+  state,
+  onLayoutCommit,
+}: {
+  state: WorldState | null;
+  onLayoutCommit: (surfaceId: string, frame: WidgetFrame) => Promise<void>;
+}) {
   if (!state?.surface) {
     return <div className="empty-widget" />;
   }
   const readyState = state as ReadyWorldState;
+  const surfaceId = readyState.surface.surfaceId;
+  const editable = readyState.selectedTx === readyState.headTx;
+  const frame = readyState.layout.widgets[surfaceId] ?? {
+    x: 0.25,
+    y: 0.16,
+    width: 0.54,
+    height: 0.5,
+  };
 
-  if (readyState.preferences.renderer === "fabric") {
-    return <FabricSurface surface={readyState.surface} scene={readyState.scene} />;
+  return (
+    <DraggableWidget
+      frame={frame}
+      surfaceId={surfaceId}
+      tx={readyState.selectedTx}
+      editable={editable}
+      onCommit={(nextFrame) => onLayoutCommit(surfaceId, nextFrame)}
+    >
+      <SurfaceSwitch state={readyState} />
+    </DraggableWidget>
+  );
+}
+
+function SurfaceSwitch({ state }: { state: ReadyWorldState }) {
+  if (!state?.surface) {
+    return <div className="empty-widget" />;
   }
 
-  if (readyState.preferences.renderer === "voice") {
+  if (state.preferences.renderer === "fabric") {
+    return <FabricSurface surface={state.surface} scene={state.scene} />;
+  }
+
+  if (state.preferences.renderer === "voice") {
     return (
-      <VoiceSurface surface={readyState.surface}>
-        <DomSurface state={readyState} />
+      <VoiceSurface surface={state.surface}>
+        <DomSurface state={state} />
       </VoiceSurface>
     );
   }
 
-  return <DomSurface state={readyState} />;
+  return <DomSurface state={state} />;
 }
 
 type ReadyWorldState = WorldState & { surface: NonNullable<WorldState["surface"]> };
@@ -496,6 +786,21 @@ async function loadState(world: WorldId, atTx: number | null) {
 async function loadFlight(world: WorldId, atTx: number) {
   const params = new URLSearchParams({ world, atTx: String(atTx) });
   return fetch(`/api/flight?${params}`).then((res) => res.json() as Promise<FlightRecorder>);
+}
+
+async function patchLayout(world: WorldId, surfaceId: string, frame: WidgetFrame) {
+  const response = await fetch("/api/layout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ world, surfaceId, frame }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { details?: unknown; error?: string }
+      | null;
+    throw new Error(body?.error ?? `Layout update failed with ${response.status}`);
+  }
+  return response.json() as Promise<WorldState>;
 }
 
 async function loadStateCached(
