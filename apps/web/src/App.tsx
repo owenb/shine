@@ -9,16 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import { A2UIProvider, A2UIRenderer, useA2UI } from "@copilotkit/a2ui-renderer";
-import {
-  CopilotKit,
-  UseAgentUpdate,
-  useAgent,
-  useAgentContext,
-  useCopilotKit,
-} from "@copilotkit/react-core/v2";
+import { CopilotKit, useAgentContext } from "@copilotkit/react-core/v2";
 import { signalCatalog } from "./a2ui-catalog";
 import {
-  isWorldId,
   normalizeWidgetFrame,
   type WidgetFrame,
   type WorldId,
@@ -64,11 +57,6 @@ function SignalApp() {
     backgroundChoices.find((choice) => choice.id === backgroundByUser[user.id]) ?? backgroundChoices[0];
   const activeBackgroundId = selectedBackground?.id ?? "";
   const palette: BgPalette = selectedBackground?.bg ?? user.bg;
-  const { copilotkit } = useCopilotKit();
-  const { agent } = useAgent({
-    agentId: "builder",
-    updates: [UseAgentUpdate.OnStateChanged, UseAgentUpdate.OnRunStatusChanged],
-  });
   const agentContext = useMemo(
     () => ({
       world,
@@ -205,18 +193,10 @@ function SignalApp() {
     setError(null);
     setPrompt("");
     try {
-      agent.addMessage({
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-      });
-      await copilotkit.runAgent({ agent });
-      if (!isWorldState(agent.state)) {
-        throw new Error("CopilotKit builder did not return a Shine state snapshot");
-      }
-      cacheWorldState(agent.state);
+      const next = await sendAgentCommand(world, trimmed);
+      cacheWorldState(next);
       setAtTx(null);
-      setState(agent.state);
+      setState(next);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : String(submitError));
     } finally {
@@ -238,6 +218,17 @@ function SignalApp() {
     async (surfaceId: string, frame: WidgetFrame) => {
       if (!state) return;
       const next = await patchLayout(world, surfaceId, normalizeWidgetFrame(frame));
+      cacheWorldState(next);
+      setAtTx(null);
+      setState(next);
+    },
+    [cacheWorldState, state, world],
+  );
+
+  const deleteWidget = useCallback(
+    async (surfaceId: string) => {
+      if (!state) return;
+      const next = await deleteLayout(world, surfaceId);
       cacheWorldState(next);
       setAtTx(null);
       setState(next);
@@ -308,7 +299,12 @@ function SignalApp() {
         </div>
 
         <section className="canvas" aria-label="A2UI Surface">
-          <DesktopSurface state={state} renderer={activeRenderer} onLayoutCommit={commitLayout} />
+          <DesktopSurface
+            state={state}
+            renderer={activeRenderer}
+            onLayoutCommit={commitLayout}
+            onWidgetDelete={deleteWidget}
+          />
         </section>
 
         {rendererFlash ? (
@@ -375,6 +371,7 @@ function DraggableWidget({
   editable,
   children,
   onCommit,
+  onDelete,
 }: {
   surfaceId: string;
   frame: WidgetFrame;
@@ -382,6 +379,7 @@ function DraggableWidget({
   editable: boolean;
   children: ReactNode;
   onCommit: (frame: WidgetFrame) => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
   const [draft, setDraft] = useState(() => normalizeWidgetFrame(frame));
   const [activeMode, setActiveMode] = useState<WidgetGestureMode | null>(null);
@@ -579,6 +577,16 @@ function DraggableWidget({
               onPointerDown={(event) => startGesture("corner", event)}
               {...sharedGestureProps}
             />
+            <button
+              type="button"
+              className="widget-delete"
+              aria-label="Delete widget"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void onDelete();
+              }}
+            />
           </>
         ) : null}
       </div>
@@ -599,82 +607,107 @@ function DesktopSurface({
   state,
   renderer,
   onLayoutCommit,
+  onWidgetDelete,
 }: {
   state: WorldState | null;
   renderer: RendererKind;
   onLayoutCommit: (surfaceId: string, frame: WidgetFrame) => Promise<void>;
+  onWidgetDelete: (surfaceId: string) => Promise<void>;
 }) {
-  if (!state?.surface) {
+  const surfaces = state?.surfaces?.length ? state.surfaces : state?.surface ? [state.surface] : [];
+  const visibleSurfaces = surfaces.filter((surface) => Boolean(state?.layout.widgets[surface.surfaceId]));
+
+  if (!state || !visibleSurfaces.length) {
     return <div className="empty-widget" />;
   }
-  const readyState = state as ReadyWorldState;
-  const surfaceId = readyState.surface.surfaceId;
-  const editable = readyState.selectedTx === readyState.headTx;
-  const frame = readyState.layout.widgets[surfaceId] ?? {
-    x: 0.25,
-    y: 0.16,
-    width: 0.54,
-    height: 0.5,
-  };
+  const editable = state.selectedTx === state.headTx;
 
   return (
-    <DraggableWidget
-      frame={frame}
-      surfaceId={surfaceId}
-      tx={readyState.selectedTx}
-      editable={editable}
-      onCommit={(nextFrame) => onLayoutCommit(surfaceId, nextFrame)}
-    >
-      <SurfaceSwitch state={readyState} renderer={renderer} />
-    </DraggableWidget>
+    <>
+      {visibleSurfaces.map((surface) => {
+        const frame = state.layout.widgets[surface.surfaceId] ?? {
+          x: 0.25,
+          y: 0.16,
+          width: 0.54,
+          height: 0.5,
+        };
+        return (
+          <DraggableWidget
+            key={surface.surfaceId}
+            frame={frame}
+            surfaceId={surface.surfaceId}
+            tx={state.selectedTx}
+            editable={editable}
+            onCommit={(nextFrame) => onLayoutCommit(surface.surfaceId, nextFrame)}
+            onDelete={() => onWidgetDelete(surface.surfaceId)}
+          >
+            <SurfaceSwitch
+              world={state.world}
+              selectedTx={state.selectedTx}
+              surface={surface}
+              scene={state.scenes?.[surface.surfaceId] ?? null}
+              renderer={renderer}
+            />
+          </DraggableWidget>
+        );
+      })}
+    </>
   );
 }
 
-function SurfaceSwitch({ state, renderer }: { state: ReadyWorldState; renderer: RendererKind }) {
-  if (!state?.surface) {
-    return <div className="empty-widget" />;
-  }
-
+function SurfaceSwitch({
+  world,
+  selectedTx,
+  surface,
+  scene,
+  renderer,
+}: {
+  world: WorldId;
+  selectedTx: number;
+  surface: NonNullable<WorldState["surface"]>;
+  scene: WorldState["scene"];
+  renderer: RendererKind;
+}) {
   if (renderer === "fabric") {
-    return <FabricSurface surface={state.surface} scene={state.scene} />;
+    return <FabricSurface surface={surface} scene={scene} />;
   }
 
   if (renderer === "voice") {
     return (
-      <VoiceSurface surface={state.surface}>
-        <DomSurface state={state} />
+      <VoiceSurface surface={surface}>
+        <DomSurface world={world} selectedTx={selectedTx} surface={surface} />
       </VoiceSurface>
     );
   }
 
-  return <DomSurface state={state} />;
+  return <DomSurface world={world} selectedTx={selectedTx} surface={surface} />;
 }
 
-type ReadyWorldState = WorldState & { surface: NonNullable<WorldState["surface"]> };
-
-function DomSurface({ state }: { state: ReadyWorldState }) {
-  const { processMessages, clearSurfaces } = useA2UI();
-  const prevKind = useRef<string | null>(null);
+function DomSurface({
+  world,
+  selectedTx,
+  surface,
+}: {
+  world: WorldId;
+  selectedTx: number;
+  surface: NonNullable<WorldState["surface"]>;
+}) {
+  const { processMessages } = useA2UI();
   const createdSurface = useRef(false);
 
   useEffect(() => {
-    if (prevKind.current !== state.surface.kind) {
-      clearSurfaces();
-      createdSurface.current = false;
-      prevKind.current = state.surface.kind;
-    }
-    const ops = state.surface.ops ?? [];
+    const ops = surface.ops ?? [];
     if (createdSurface.current) {
       processMessages(ops.filter((op) => !("createSurface" in op)));
     } else {
       processMessages(ops);
       createdSurface.current = true;
     }
-  }, [clearSurfaces, processMessages, state.surface.kind, state.selectedTx, state.surface.ops]);
+  }, [processMessages, selectedTx, surface.ops]);
 
   return (
-    <div className="surface-stage" key={`${state.world}:${state.surface.kind}`}>
-      <A2UIRenderer surfaceId={state.surface.surfaceId} fallback={<div className="empty-widget" />} />
+    <div className="surface-stage" key={`${world}:${surface.surfaceId}:${surface.kind}`}>
+      <A2UIRenderer surfaceId={surface.surfaceId} fallback={<div className="empty-widget" />} />
     </div>
   );
 }
@@ -683,6 +716,21 @@ async function loadState(world: WorldId, atTx: number | null) {
   const params = new URLSearchParams({ world });
   if (atTx !== null) params.set("atTx", String(atTx));
   return fetch(`/api/state?${params}`).then((res) => res.json() as Promise<WorldState>);
+}
+
+async function sendAgentCommand(world: WorldId, prompt: string) {
+  const response = await fetch("/api/agent", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ world, prompt, source: "composer" }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { details?: string; error?: string }
+      | null;
+    throw new Error(body?.details ?? body?.error ?? `Agent failed with ${response.status}`);
+  }
+  return response.json() as Promise<WorldState>;
 }
 
 async function patchLayout(world: WorldId, surfaceId: string, frame: WidgetFrame) {
@@ -696,6 +744,21 @@ async function patchLayout(world: WorldId, surfaceId: string, frame: WidgetFrame
       | { details?: unknown; error?: string }
       | null;
     throw new Error(body?.error ?? `Layout update failed with ${response.status}`);
+  }
+  return response.json() as Promise<WorldState>;
+}
+
+async function deleteLayout(world: WorldId, surfaceId: string) {
+  const response = await fetch("/api/layout/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ world, surfaceId }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { details?: unknown; error?: string }
+      | null;
+    throw new Error(body?.error ?? `Widget delete failed with ${response.status}`);
   }
   return response.json() as Promise<WorldState>;
 }
@@ -751,10 +814,4 @@ function saveBackgroundPrefs(value: Record<string, string>) {
   } catch {
     // Non-critical preference.
   }
-}
-
-function isWorldState(value: unknown): value is WorldState {
-  if (!value || typeof value !== "object") return false;
-  const maybe = value as Partial<WorldState>;
-  return typeof maybe.world === "string" && isWorldId(maybe.world) && typeof maybe.headTx === "number";
 }

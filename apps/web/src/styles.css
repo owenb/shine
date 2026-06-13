@@ -64,6 +64,15 @@ cpk-web-inspector {
     #ffffff;
 }
 
+.shine-bg--css {
+  background:
+    radial-gradient(60% 50% at 22% 18%, var(--shine-bg-1), transparent 70%),
+    radial-gradient(55% 45% at 82% 28%, var(--shine-bg-2), transparent 70%),
+    radial-gradient(60% 55% at 50% 92%, var(--shine-bg-3), transparent 72%),
+    radial-gradient(40% 34% at 62% 44%, var(--shine-bg-4), transparent 70%),
+    #ffffff;
+}
+
 button,
 input {
   font: inherit;
@@ -291,7 +300,8 @@ button {
 }
 
 .widget-move-handle,
-.widget-resize-handle {
+.widget-resize-handle,
+.widget-delete {
   position: absolute;
   z-index: 6;
   opacity: 0;
@@ -301,8 +311,10 @@ button {
 
 .desktop-widget:hover .widget-move-handle,
 .desktop-widget:hover .widget-resize-handle,
+.desktop-widget:hover .widget-delete,
 .desktop-widget.moving .widget-move-handle,
-.desktop-widget.moving .widget-resize-handle {
+.desktop-widget.moving .widget-resize-handle,
+.desktop-widget.moving .widget-delete {
   opacity: 1;
 }
 
@@ -364,6 +376,43 @@ button {
   border-right: 2px solid rgba(17, 17, 20, 0.22);
   border-bottom: 2px solid rgba(17, 17, 20, 0.22);
   border-radius: 1px;
+}
+
+.widget-delete {
+  top: -11px;
+  right: -11px;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(17, 17, 20, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 10px 28px rgba(20, 24, 32, 0.12);
+  backdrop-filter: blur(16px);
+}
+
+.widget-delete::before,
+.widget-delete::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 11px;
+  width: 9px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: rgba(17, 17, 20, 0.44);
+}
+
+.widget-delete::before {
+  transform: rotate(45deg);
+}
+
+.widget-delete::after {
+  transform: rotate(-45deg);
+}
+
+.widget-delete:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.94);
 }
 
 .signal-widget {

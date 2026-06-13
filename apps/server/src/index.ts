@@ -695,6 +695,55 @@ async function applySignalCommand({
   return { receipt, state };
 }
 
+function createSurfaceId(tx: number) {
+  return `${SURFACE_ID}-${tx}`;
+}
+
+function findOpenWidgetFrame(
+  layout: DesktopLayout,
+  kind: SignalSurface["kind"],
+) {
+  const size =
+    kind === "sources" || kind === "table"
+      ? { width: 0.42, height: 0.48 }
+      : kind === "trend"
+        ? { width: 0.4, height: 0.44 }
+        : { width: 0.34, height: 0.38 };
+  const existing = Object.values(layout.widgets).map(normalizeWidgetFrame);
+  const candidates = [
+    { x: 0.06, y: 0.08 },
+    { x: 0.56, y: 0.08 },
+    { x: 0.06, y: 0.54 },
+    { x: 0.56, y: 0.54 },
+    { x: 0.3, y: 0.08 },
+    { x: 0.3, y: 0.54 },
+    { x: 0.06, y: 0.31 },
+    { x: 0.56, y: 0.31 },
+    { x: 0.32, y: 0.28 },
+  ];
+
+  for (const candidate of candidates) {
+    const frame = normalizeWidgetFrame({ ...candidate, ...size });
+    if (existing.every((item) => overlapRatio(frame, item) < 0.08)) {
+      return frame;
+    }
+  }
+
+  const index = existing.length;
+  return normalizeWidgetFrame({
+    ...size,
+    x: 0.05 + ((index * 0.17) % 0.5),
+    y: 0.08 + ((index * 0.19) % 0.48),
+  });
+}
+
+function overlapRatio(first: ReturnType<typeof normalizeWidgetFrame>, second: ReturnType<typeof normalizeWidgetFrame>) {
+  const x = Math.max(0, Math.min(first.x + first.width, second.x + second.width) - Math.max(first.x, second.x));
+  const y = Math.max(0, Math.min(first.y + first.height, second.y + second.height) - Math.max(first.y, second.y));
+  const overlap = x * y;
+  return overlap / Math.min(first.width * first.height, second.width * second.height);
+}
+
 function getLatestResearchGrounding(world: WorldId, tx: number): Grounding | undefined {
   const row = db
     .prepare(
@@ -743,7 +792,8 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
 
   let preferences = defaultPreferences(world);
   let layout = defaultDesktopLayout(world);
-  let surface: SignalSurface | null = null;
+  const surfaceById = new Map<string, SignalSurface>();
+  let latestSurfaceId: string | null = null;
   let codePin: string | null = null;
   let agent: WorldState["agent"] = null;
 
@@ -756,7 +806,14 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
       layout = normalizeDesktopLayout(world, value);
     }
     if (fact.entity === "surface" && fact.attr === "current") {
-      surface = value as SignalSurface;
+      const nextSurface = value as SignalSurface;
+      surfaceById.set(nextSurface.surfaceId, nextSurface);
+      latestSurfaceId = nextSurface.surfaceId;
+    }
+    if (fact.entity === "surface" && fact.attr.startsWith("instance:")) {
+      const nextSurface = value as SignalSurface;
+      surfaceById.set(nextSurface.surfaceId, nextSurface);
+      latestSurfaceId = nextSurface.surfaceId;
     }
     if (fact.entity === "world" && fact.attr === "codePin") {
       codePin = String(value);
@@ -766,13 +823,26 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
     }
   }
 
+  const visibleSurfaces = Array.from(surfaceById.values()).filter(
+    (item) => Boolean(layout.widgets[item.surfaceId]),
+  );
+  const surface =
+    visibleSurfaces.find((item) => item.surfaceId === latestSurfaceId) ??
+    visibleSurfaces.at(-1) ??
+    null;
+  const scenes = Object.fromEntries(
+    visibleSurfaces.map((item) => [item.surfaceId, composeScene(item, preferences)]),
+  );
+
   return {
     world,
     headTx,
     selectedTx,
     preferences,
     surface,
+    surfaces: visibleSurfaces,
     scene: surface ? composeScene(surface, preferences) : null,
+    scenes,
     timeline: getTimeline(world),
     receipts: getReceipts(world, selectedTx),
     componentModule: codePin ? getBlob(codePin) : null,
@@ -832,7 +902,7 @@ function normalizeDesktopLayout(world: WorldId, value: FactValue): DesktopLayout
   const widgets = (value as { widgets?: unknown }).widgets;
   if (!widgets || typeof widgets !== "object") return fallback;
 
-  const normalized: DesktopLayout = { widgets: { ...fallback.widgets } };
+  const normalized: DesktopLayout = { widgets: {} };
   for (const [surfaceId, rawFrame] of Object.entries(widgets as Record<string, unknown>)) {
     const parsed = LayoutPatchSchema.shape.frame.safeParse(rawFrame);
     if (parsed.success) {
