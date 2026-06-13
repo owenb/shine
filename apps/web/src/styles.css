@@ -94,24 +94,16 @@ button {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  color: #111114;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: 0;
+  width: 136px;
+  min-width: 136px;
   pointer-events: none;
 }
 
-.brand-mark {
-  width: 16px;
-  height: 16px;
-  border-radius: 6px;
-  background:
-    radial-gradient(120% 120% at 30% 20%, #ffffff 0%, rgba(255, 255, 255, 0) 45%),
-    conic-gradient(from 210deg, #1677ff, #7b5bff, #14b083, #1677ff);
-  box-shadow:
-    0 2px 8px rgba(22, 119, 255, 0.34),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+.brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  opacity: 0.3;
 }
 
 .memory-dot {
@@ -176,6 +168,36 @@ button {
     0 0 0 2px #ffffff,
     0 0 0 3.5px var(--accent-line),
     0 4px 12px var(--accent-soft);
+}
+
+.bg-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.bg-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(17, 17, 20, 0.08);
+  border-radius: 999px;
+  padding: 0;
+  opacity: 0.52;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+  transition: opacity 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.bg-swatch:hover,
+.bg-swatch.selected {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+.bg-swatch.selected {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+    0 0 0 2px #ffffff,
+    0 0 0 3px rgba(17, 17, 20, 0.14);
 }
 
 .world-toggle {
@@ -522,122 +544,6 @@ button {
   background: rgba(255, 255, 255, 0.72);
 }
 
-.flight-panel {
-  position: fixed;
-  top: 72px;
-  left: 28px;
-  z-index: 2;
-  width: 268px;
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid rgba(17, 17, 20, 0.08);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 18px 50px rgba(20, 24, 32, 0.08);
-  color: #111114;
-  backdrop-filter: blur(22px);
-}
-
-.flight-head,
-.flight-line,
-.flight-memory {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.flight-head {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.flight-head strong,
-.flight-line strong {
-  color: #111114;
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.flight-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.proof-badge,
-.flight-memory mark {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 100%;
-  border: 1px solid rgba(17, 17, 20, 0.08);
-  border-radius: 999px;
-  background: rgba(247, 247, 248, 0.86);
-  color: #5f626d;
-  padding: 5px 7px;
-  font-size: 10px;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.proof-badge.active {
-  border-color: rgba(29, 179, 107, 0.25);
-  background: rgba(29, 179, 107, 0.08);
-  color: #117d4b;
-}
-
-.proof-badge small {
-  color: #a0a2aa;
-  font-size: 9px;
-}
-
-.flight-memory {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.flight-memory mark {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.flight-dot {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: #d7d8dd;
-}
-
-.flight-dot.on {
-  background: var(--green);
-}
-
-.flight-list,
-.flight-effects {
-  display: grid;
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(17, 17, 20, 0.06);
-}
-
-.flight-line {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.25;
-}
-
-.flight-line span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .fabric-stage {
   width: 100%;
   height: 100%;
@@ -938,10 +844,6 @@ button {
 @media (max-width: 760px) {
   .topbar {
     padding: 0 16px;
-  }
-
-  .flight-panel {
-    display: none;
   }
 
   .canvas {

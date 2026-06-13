@@ -28,6 +28,61 @@ export type ShineUser = {
   bg: BgPalette;
 };
 
+export type BackgroundChoice = {
+  id: string;
+  label: string;
+  swatch: string;
+  bg: BgPalette;
+};
+
+export const backgroundChoices: BackgroundChoice[] = [
+  {
+    id: "glass",
+    label: "Glass",
+    swatch: "linear-gradient(140deg, #bfc8ff, #d8c6ff, #cbf4e7)",
+    bg: {
+      colors: [
+        [0.74, 0.79, 1.0],
+        [0.85, 0.8, 1.0],
+        [0.78, 0.96, 0.9],
+        [1.0, 0.89, 0.85],
+      ],
+      speed: 0.022,
+      lift: 0.32,
+    },
+  },
+  {
+    id: "warm",
+    label: "Warm",
+    swatch: "linear-gradient(140deg, #ffd7bd, #ffc7d6, #fff0cc)",
+    bg: {
+      colors: [
+        [1.0, 0.87, 0.76],
+        [1.0, 0.82, 0.74],
+        [1.0, 0.91, 0.82],
+        [1.0, 0.85, 0.8],
+      ],
+      speed: 0.018,
+      lift: 0.35,
+    },
+  },
+  {
+    id: "quiet",
+    label: "Quiet",
+    swatch: "linear-gradient(140deg, #dce3ec, #eef2f6, #d9f4ef)",
+    bg: {
+      colors: [
+        [0.87, 0.9, 0.94],
+        [0.89, 0.91, 0.95],
+        [0.84, 0.98, 0.93],
+        [0.85, 0.89, 0.93],
+      ],
+      speed: 0.016,
+      lift: 0.38,
+    },
+  },
+];
+
 export const users: ShineUser[] = [
   {
     id: "aria",

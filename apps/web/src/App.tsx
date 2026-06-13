@@ -20,8 +20,6 @@ import { signalCatalog } from "./a2ui-catalog";
 import {
   isWorldId,
   normalizeWidgetFrame,
-  type AgentRole,
-  type Receipt,
   type WidgetFrame,
   type WorldId,
   type WorldState,
@@ -30,30 +28,10 @@ import { FabricSurface } from "./FabricSurface";
 import { VoiceSurface } from "./VoiceSurface";
 import { ShineBackground } from "./ShineBackground";
 import { Scrubber } from "./Scrubber";
-import { users } from "./users";
+import { backgroundChoices, users, type BgPalette } from "./users";
+import shineLogo from "./assets/shine-logo.png";
 
 type RendererKind = "dom" | "fabric" | "voice";
-
-type FlightEffect = {
-  world: WorldId;
-  tx: number;
-  kind: string;
-  role?: AgentRole | null;
-  input: unknown;
-  output: unknown;
-  reused: boolean;
-  at: string;
-};
-
-type FlightRecorder = {
-  world: WorldId;
-  headTx: number;
-  selectedTx: number;
-  redis: WorldState["redis"];
-  linkup: WorldState["linkup"];
-  receipts: Array<Receipt & { summary?: string }>;
-  effects: FlightEffect[];
-};
 
 export function App() {
   return (
@@ -75,14 +53,17 @@ function SignalApp() {
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [flight, setFlight] = useState<FlightRecorder | null>(null);
   const [componentStyle, setComponentStyle] = useState<CSSProperties | null>(null);
   const [rendererOverride, setRendererOverride] = useState<RendererKind | null>(null);
   const [rendererFlash, setRendererFlash] = useState(false);
+  const [backgroundByUser, setBackgroundByUser] = useState<Record<string, string>>(() => loadBackgroundPrefs());
   const stateCache = useRef(new Map<string, WorldState>());
   const inflightState = useRef(new Map<string, Promise<WorldState>>());
   const user = users.find((item) => item.id === userId) ?? users[0];
   const world: WorldId = user.world;
+  const backgroundId = backgroundByUser[user.id];
+  const selectedBackground = backgroundChoices.find((choice) => choice.id === backgroundId);
+  const palette: BgPalette = selectedBackground?.bg ?? user.bg;
   const { copilotkit } = useCopilotKit();
   const { agent } = useAgent({
     agentId: "builder",
@@ -131,21 +112,6 @@ function SignalApp() {
     });
     return () => events.close();
   }, [world, atTx, cacheWorldState]);
-
-  useEffect(() => {
-    if (!state) return;
-    let cancelled = false;
-    void loadFlight(world, state.selectedTx)
-      .then((next) => {
-        if (!cancelled) setFlight(next);
-      })
-      .catch(() => {
-        if (!cancelled) setFlight(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [world, state?.selectedTx]);
 
   const timeline = state?.timeline ?? [];
   const timelineKey = useMemo(() => timeline.map((item) => item.tx).join(","), [timeline]);
@@ -279,9 +245,20 @@ function SignalApp() {
     [cacheWorldState, state, world],
   );
 
+  const chooseBackground = useCallback(
+    (id: string) => {
+      setBackgroundByUser((current) => {
+        const next = { ...current, [user.id]: id };
+        saveBackgroundPrefs(next);
+        return next;
+      });
+    },
+    [user.id],
+  );
+
   return (
     <A2UIProvider catalog={signalCatalog}>
-      <ShineBackground palette={user.bg} />
+      <ShineBackground palette={palette} />
       <main
         className="app-shell"
         data-live={live ? "true" : "false"}
@@ -290,9 +267,7 @@ function SignalApp() {
       >
         <header className="topbar">
           <div className="brand">
-            <span className="brand-mark" aria-hidden="true" />
-            Shine
-            <span className={state?.redis.connected ? "memory-dot on" : "memory-dot"} />
+            <img src={shineLogo} alt="Shine" className="brand-logo" />
           </div>
           <div className="user-switcher" role="radiogroup" aria-label="User">
             <span className="user-name">{user.name}</span>
@@ -316,14 +291,24 @@ function SignalApp() {
                 </button>
               ))}
             </div>
+            <div className="bg-switcher" aria-label="Background">
+              {backgroundChoices.map((choice) => (
+                <button
+                  key={choice.id}
+                  type="button"
+                  aria-label={`${choice.label} background`}
+                  className={choice.id === selectedBackground?.id ? "bg-swatch selected" : "bg-swatch"}
+                  style={{ background: choice.swatch }}
+                  onClick={() => chooseBackground(choice.id)}
+                />
+              ))}
+            </div>
           </div>
         </header>
 
         <section className="canvas" aria-label="A2UI Surface">
           <DesktopSurface state={state} renderer={activeRenderer} onLayoutCommit={commitLayout} />
         </section>
-
-        <FlightRecorderPanel state={state} flight={flight} />
 
         {rendererFlash ? (
           <div className="renderer-flash" aria-live="polite">
@@ -367,95 +352,6 @@ function SignalApp() {
         </section>
       </main>
     </A2UIProvider>
-  );
-}
-
-function FlightRecorderPanel({
-  state,
-  flight,
-}: {
-  state: WorldState | null;
-  flight: FlightRecorder | null;
-}) {
-  const agent = state?.agent;
-  const memory = Object.entries(state?.redis.memory ?? {}).slice(0, 3);
-  const receipts = (flight?.receipts.length ? flight.receipts : state?.receipts ?? []).slice(0, 3);
-  const effects = (flight?.effects ?? []).slice(0, 4);
-  const selectedTx = flight?.selectedTx ?? state?.selectedTx ?? 0;
-
-  return (
-    <aside className="flight-panel" aria-label="Flight Recorder">
-      <div className="flight-head">
-        <span>Flight</span>
-        <strong>tx {String(selectedTx).padStart(3, "0")}</strong>
-      </div>
-
-      <div className="flight-badges" aria-label="Agent proof">
-        <ProofBadge label={agent?.provider ?? "agent"} value={agent?.model ? compactModel(agent.model) : "waiting"} />
-        <ProofBadge label="cache" value={agent?.reused ? "reused" : "fresh"} active={Boolean(agent?.reused)} />
-        <ProofBadge label="LinkUp" value={agent?.grounded ? "grounded" : state?.linkup.configured ? "ready" : "no key"} active={Boolean(agent?.grounded)} />
-        <ProofBadge
-          label="memory"
-          value={agent?.memory ? `${agent.memory.provider} ${agent.memory.count}` : `${memory.length}`}
-          active={Boolean(agent?.memory?.count)}
-        />
-      </div>
-
-      <div className="flight-memory" aria-label="Redis memory">
-        <span className={state?.redis.connected ? "flight-dot on" : "flight-dot"} />
-        <span>Redis</span>
-        {memory.length ? (
-          memory.map(([key, value]) => (
-            <mark key={key}>
-              {key}:{value}
-            </mark>
-          ))
-        ) : (
-          <mark>empty</mark>
-        )}
-      </div>
-
-      <div className="flight-list" aria-label="Receipts">
-        {receipts.map((receipt) => (
-          <div key={`${receipt.tx}-${receipt.code}`} className="flight-line">
-            <span>
-              {receipt.role ? `${receipt.role} / ` : ""}
-              {receipt.code.replace(/_/g, " ").toLowerCase()}
-            </span>
-            <strong>{String(receipt.tx).padStart(3, "0")}</strong>
-          </div>
-        ))}
-      </div>
-
-      <div className="flight-effects" aria-label="Effects">
-        {effects.map((effect) => (
-          <div key={`${effect.tx}-${effect.kind}-${effect.at}`} className="flight-line">
-            <span>
-              {effect.role ? `${effect.role} / ` : ""}
-              {effect.kind.replace(/^gemini-/, "")}
-            </span>
-            <strong>{effect.reused ? "reused" : `tx ${String(effect.tx).padStart(3, "0")}`}</strong>
-          </div>
-        ))}
-      </div>
-    </aside>
-  );
-}
-
-function ProofBadge({
-  label,
-  value,
-  active = false,
-}: {
-  label: string;
-  value: string;
-  active?: boolean;
-}) {
-  return (
-    <span className={active ? "proof-badge active" : "proof-badge"}>
-      <small>{label}</small>
-      {value}
-    </span>
   );
 }
 
@@ -788,11 +684,6 @@ async function loadState(world: WorldId, atTx: number | null) {
   return fetch(`/api/state?${params}`).then((res) => res.json() as Promise<WorldState>);
 }
 
-async function loadFlight(world: WorldId, atTx: number) {
-  const params = new URLSearchParams({ world, atTx: String(atTx) });
-  return fetch(`/api/flight?${params}`).then((res) => res.json() as Promise<FlightRecorder>);
-}
-
 async function patchLayout(world: WorldId, surfaceId: string, frame: WidgetFrame) {
   const response = await fetch("/api/layout", {
     method: "POST",
@@ -840,12 +731,25 @@ function stateCacheKey(world: WorldId, atTx: number | null) {
   return `${world}:${atTx ?? "live"}`;
 }
 
-function compactModel(model: string) {
-  return model.replace(/^gemini-/, "").replace(/-flash/, " flash");
-}
-
 function rendererLabel(renderer: RendererKind) {
   return renderer === "fabric" ? "Cloth" : renderer === "voice" ? "Voice" : "DOM";
+}
+
+function loadBackgroundPrefs() {
+  try {
+    const raw = window.localStorage.getItem("shine:bg");
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveBackgroundPrefs(value: Record<string, string>) {
+  try {
+    window.localStorage.setItem("shine:bg", JSON.stringify(value));
+  } catch {
+    // Non-critical preference.
+  }
 }
 
 function isWorldState(value: unknown): value is WorldState {
