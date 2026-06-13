@@ -39,7 +39,7 @@ export function App() {
 }
 
 function SignalApp() {
-  const [userId, setUserId] = useState<string>(users[0].id);
+  const [userId, setUserId] = useState<string>(() => userIdFromLocation());
   const [state, setState] = useState<WorldState | null>(null);
   const [atTx, setAtTx] = useState<number | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -70,6 +70,15 @@ function SignalApp() {
     description: "signal-ui-context",
     value: agentContext,
   });
+
+  useEffect(() => {
+    function onPopState() {
+      setUserId(userIdFromLocation());
+      setAtTx(null);
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const cacheWorldState = useCallback((next: WorldState) => {
     stateCache.current.set(stateCacheKey(next.world, next.selectedTx), next);
@@ -231,6 +240,12 @@ function SignalApp() {
     [cacheWorldState, state, world],
   );
 
+  const selectUser = useCallback((nextUserId: string) => {
+    setUserId(nextUserId);
+    setAtTx(null);
+    pushUserIdToLocation(nextUserId);
+  }, []);
+
   const chooseBackground = useCallback(
     (id: string) => {
       setBackgroundByUser((current) => {
@@ -249,6 +264,7 @@ function SignalApp() {
         className="app-shell"
         data-live={live ? "true" : "false"}
         data-density={user.density}
+        data-theme={selectedBackground?.bg.dark ? "dark" : "light"}
         style={{ ...(componentStyle ?? {}), ...user.theme } as CSSProperties}
       >
         <header className="topbar">
@@ -268,10 +284,7 @@ function SignalApp() {
                   title={item.name}
                   className={item.id === userId ? "user-avatar selected" : "user-avatar"}
                   style={{ background: item.avatar }}
-                  onClick={() => {
-                    setUserId(item.id);
-                    setAtTx(null);
-                  }}
+                  onClick={() => selectUser(item.id)}
                 >
                   {item.initial}
                 </button>
@@ -792,6 +805,24 @@ function stateCacheKey(world: WorldId, atTx: number | null) {
 
 function rendererLabel(renderer: RendererKind) {
   return renderer === "fabric" ? "Cloth" : renderer === "voice" ? "Voice" : "DOM";
+}
+
+function userIdFromLocation() {
+  if (typeof window === "undefined") return users[0].id;
+  const value = new URLSearchParams(window.location.search).get("user");
+  return isKnownUserId(value) ? value : users[0].id;
+}
+
+function pushUserIdToLocation(userId: string) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("user") === userId) return;
+  url.searchParams.set("user", userId);
+  window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function isKnownUserId(value: string | null): value is string {
+  return users.some((item) => item.id === value);
 }
 
 function loadBackgroundPrefs() {
