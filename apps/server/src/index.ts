@@ -354,10 +354,12 @@ async function connectRedis() {
 }
 
 function seedIfEmpty() {
-  const count = db.prepare("SELECT COUNT(*) AS count FROM txs").get() as { count: number };
-  if (count.count > 0) return;
-
   for (const world of worlds) {
+    const count = db.prepare("SELECT COUNT(*) AS count FROM txs WHERE world = ?").get(world) as {
+      count: number;
+    };
+    if (count.count > 0) continue;
+
     const prefs = defaultPreferences(world);
     const codeHash = insertComponentBlob(prefs.component);
     const tx = insertTx(world, "Created world");
