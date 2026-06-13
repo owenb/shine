@@ -9,15 +9,20 @@ import {
   CopilotRuntime,
   InMemoryAgentRunner,
   createCopilotEndpoint,
-  defineTool,
 } from "@copilotkit/runtime/v2";
+import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/client";
+import {
+  MemoryAPIClient,
+  Topics,
+  UserId,
+  type MemoryRecord,
+} from "agent-memory-client";
 import { GoogleGenAI } from "@google/genai";
 import { config as loadEnv } from "dotenv";
 import { LinkupClient } from "linkup-sdk";
 import { createClient, type RedisClientType } from "redis";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { z } from "zod";
 import {
   CATALOG_ID,
   CommandSchema,
@@ -98,6 +103,11 @@ type ServerRedis = {
   memory: Map<WorldId, Record<string, string>>;
 };
 
+type MemoryContext = {
+  provider: "iris" | "redis-hash";
+  memories: string[];
+};
+
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const redis: ServerRedis = {
   configured: true,
@@ -105,8 +115,28 @@ const redis: ServerRedis = {
   client: null,
   memory: new Map(),
 };
+const agentMemoryBaseUrl =
+  process.env.AGENT_MEMORY_BASE_URL ??
+  process.env.REDIS_AGENT_MEMORY_URL ??
+  process.env.IRIS_MEMORY_URL;
+const agentMemoryNamespace = process.env.AGENT_MEMORY_NAMESPACE ?? "signal-ui";
+const agentMemory = agentMemoryBaseUrl
+  ? new MemoryAPIClient({
+      baseUrl: agentMemoryBaseUrl,
+      apiKey: process.env.AGENT_MEMORY_API_KEY ?? process.env.REDIS_AGENT_MEMORY_API_KEY,
+      bearerToken: process.env.AGENT_MEMORY_BEARER_TOKEN,
+      defaultNamespace: agentMemoryNamespace,
+      timeout: 8_000,
+    })
+  : null;
+const agentMemoryStatus: WorldState["redis"]["agentMemory"] = {
+  configured: Boolean(agentMemory),
+  connected: false,
+  namespace: agentMemoryNamespace,
+};
 const geminiApiKey = process.env.GEMINI_API_KEY;
 const geminiModel = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite";
+const geminiTtsModel = process.env.GEMINI_TTS_MODEL ?? "gemini-3.1-flash-tts-preview";
 const geminiVertexai = true;
 const gemini = geminiApiKey
   ? new GoogleGenAI({ apiKey: geminiApiKey, vertexai: geminiVertexai })
@@ -116,34 +146,15 @@ const linkup = process.env.LINKUP_API_KEY
   : null;
 
 void connectRedis();
+void connectAgentMemory();
 seedIfEmpty();
 
 const app = new Hono();
 app.use("*", cors());
 
 const copilotBuilder = new BuiltInAgent({
-  model: `google/${geminiModel}`,
-  apiKey: geminiApiKey,
-  maxSteps: 2,
-  prompt:
-    "You are the Signal UI builder. Convert user requests into one emit_signal tool call. Keep responses terse.",
-  tools: [
-    defineTool({
-      name: "emit_signal",
-      description: "Build or personalize the current Signal UI world.",
-      parameters: z.object({
-        world: z.enum(worlds),
-        prompt: z.string(),
-      }),
-      execute: async ({ world, prompt }) => {
-        const receipt = await applyAgentCommand({ world, prompt, source: "copilotkit" });
-        return {
-          receipt,
-          state: getWorldState(world, receipt.tx),
-        };
-      },
-    }),
-  ],
+  type: "custom",
+  factory: ({ input }) => runSignalBuilderAgent(input),
 });
 
 const copilotApp = createCopilotEndpoint({
@@ -163,7 +174,13 @@ app.get("/api/health", (c) =>
   c.json({
     ok: true,
     redis: { configured: redis.configured, connected: redis.connected },
-    gemini: { configured: Boolean(gemini), model: geminiModel, vertexai: geminiVertexai },
+    agentMemory: agentMemoryStatus,
+    gemini: {
+      configured: Boolean(gemini),
+      model: geminiModel,
+      ttsModel: geminiTtsModel,
+      vertexai: geminiVertexai,
+    },
     catalogId: CATALOG_ID,
     surfaceId: SURFACE_ID,
   }),
@@ -214,6 +231,37 @@ app.post("/api/agent", async (c) => {
     return c.json(
       {
         error: "Gemini signal generation failed",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      502,
+    );
+  }
+});
+
+app.post("/api/tts", async (c) => {
+  const raw = (await c.req.json().catch(() => null)) as
+    | { text?: unknown; voice?: unknown }
+    | null;
+  const text = typeof raw?.text === "string" ? raw.text.trim().slice(0, 1_200) : "";
+  const voiceName = typeof raw?.voice === "string" && raw.voice.trim() ? raw.voice.trim() : "Kore";
+  if (!text) {
+    return c.json({ error: "Missing text" }, 400);
+  }
+
+  try {
+    const audio = await synthesizeVoice(text, voiceName);
+    const body = new Uint8Array(audio);
+    return new Response(body, {
+      headers: {
+        "Content-Type": "audio/wav",
+        "Cache-Control": "private, max-age=3600",
+        "X-Gemini-TTS-Model": geminiTtsModel,
+      },
+    });
+  } catch (error) {
+    return c.json(
+      {
+        error: "Gemini TTS failed",
         details: error instanceof Error ? error.message : String(error),
       },
       502,
@@ -275,6 +323,20 @@ async function connectRedis() {
   }
 }
 
+async function connectAgentMemory() {
+  if (!agentMemory) return;
+  try {
+    await agentMemory.healthCheck();
+    agentMemoryStatus.connected = true;
+    agentMemoryStatus.error = undefined;
+    console.log("[agent-memory] connected");
+  } catch (error) {
+    agentMemoryStatus.connected = false;
+    agentMemoryStatus.error = error instanceof Error ? error.message : String(error);
+    console.warn("[agent-memory] unavailable:", agentMemoryStatus.error);
+  }
+}
+
 function seedIfEmpty() {
   const count = db.prepare("SELECT COUNT(*) AS count FROM txs").get() as { count: number };
   if (count.count > 0) return;
@@ -313,7 +375,8 @@ async function applyCommand(input: CommandInput): Promise<Receipt> {
 }
 
 async function applyAgentCommand(input: CommandInput): Promise<Receipt> {
-  const signalResult = await resolveSignal(input.prompt);
+  const memoryContext = await retrieveMemoryContext(input.world, input.prompt);
+  const signalResult = await resolveSignal(input.prompt, memoryContext);
   const grounding =
     signalResult.signal.type === "renderWidget" && signalResult.signal.intent === "competitors"
       ? await resolveGrounding(input.prompt)
@@ -322,24 +385,72 @@ async function applyAgentCommand(input: CommandInput): Promise<Receipt> {
     input,
     signal: signalResult.signal,
     grounding,
+    memoryContext,
     agent: {
       provider: signalResult.provider,
       model: signalResult.model,
       reused: signalResult.reused,
       grounded: Boolean(grounding),
+      memory: memoryContext
+        ? { provider: memoryContext.provider, count: memoryContext.memories.length }
+        : undefined,
     },
   });
+}
+
+async function* runSignalBuilderAgent(input: RunAgentInput): AsyncIterable<BaseEvent> {
+  const world = extractCopilotWorld(input);
+  const prompt = extractLatestUserText(input);
+  if (!prompt) {
+    throw new Error("CopilotKit builder received an empty user prompt");
+  }
+
+  const messageId = `signal-${input.runId}`;
+  yield {
+    type: EventType.CUSTOM,
+    name: "signal.ui.command",
+    value: { world, prompt },
+  };
+
+  const receipt = await applyAgentCommand({ world, prompt, source: "copilotkit" });
+  const state = getWorldState(world, receipt.tx);
+
+  yield {
+    type: EventType.STATE_SNAPSHOT,
+    snapshot: state,
+  };
+  yield {
+    type: EventType.TEXT_MESSAGE_START,
+    messageId,
+    role: "assistant",
+  };
+  yield {
+    type: EventType.TEXT_MESSAGE_CONTENT,
+    messageId,
+    delta: `Rendered ${state.surface?.data.title ?? "Signal UI"}.`,
+  };
+  yield {
+    type: EventType.TEXT_MESSAGE_END,
+    messageId,
+  };
+  yield {
+    type: EventType.CUSTOM,
+    name: "signal.ui.state",
+    value: { receipt, state },
+  };
 }
 
 async function applySignalCommand({
   input,
   signal,
   grounding,
+  memoryContext,
   agent,
 }: {
   input: CommandInput;
   signal: SignalPacket;
   grounding?: Grounding;
+  memoryContext?: MemoryContext;
   agent: NonNullable<WorldState["agent"]>;
 }): Promise<Receipt> {
   const current = getWorldState(input.world);
@@ -394,7 +505,9 @@ async function applySignalCommand({
     preferenceChanges.length ? "MEMORY_LEARNED" : "SURFACE_RENDERED",
     preferenceChanges.length
       ? `Curator learned ${preferenceChanges.map((change) => `${change.key}=${change.value}`).join(", ")}; Builder re-rendered.`
-      : "Signal compiled through Loom into A2UI.",
+      : memoryContext
+        ? `Builder used ${memoryContext.provider} memory and compiled through Loom into A2UI.`
+        : "Signal compiled through Loom into A2UI.",
   );
   await writeRedisStream("receipt", {
     world: input.world,
@@ -406,6 +519,29 @@ async function applySignalCommand({
   });
   broadcast(input.world, getWorldState(input.world, tx));
   return receipt;
+}
+
+function extractCopilotWorld(input: RunAgentInput): WorldId {
+  for (const item of input.context ?? []) {
+    try {
+      const value = JSON.parse(item.value) as { world?: unknown };
+      if (typeof value.world === "string" && isWorldId(value.world)) {
+        return value.world;
+      }
+    } catch {
+      // Ignore unrelated CopilotKit context entries.
+    }
+  }
+  return "world-a";
+}
+
+function extractLatestUserText(input: RunAgentInput): string {
+  for (const message of [...input.messages].reverse()) {
+    if (message.role === "user" && typeof message.content === "string") {
+      return message.content.trim();
+    }
+  }
+  return "";
 }
 
 function getWorldState(world: WorldId, atTx?: number): WorldState {
@@ -453,6 +589,7 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
       configured: redis.configured,
       connected: redis.connected,
       memory: redis.memory.get(world) ?? {},
+      agentMemory: agentMemoryStatus,
     },
   };
 }
@@ -529,7 +666,11 @@ function getFlightRecorder(world: WorldId) {
     }));
   return {
     world,
-    redis: { connected: redis.connected, memory: redis.memory.get(world) ?? {} },
+    redis: {
+      connected: redis.connected,
+      memory: redis.memory.get(world) ?? {},
+      agentMemory: agentMemoryStatus,
+    },
     receipts,
     effects,
   };
@@ -593,7 +734,7 @@ function insertComponentBlob(variant: WorldPreferences["component"]) {
   return hash;
 }
 
-async function resolveSignal(prompt: string): Promise<{
+async function resolveSignal(prompt: string, memoryContext?: MemoryContext): Promise<{
   signal: SignalPacket;
   provider: "gemini";
   model: string;
@@ -603,7 +744,12 @@ async function resolveSignal(prompt: string): Promise<{
     throw new Error("GEMINI_API_KEY is not configured");
   }
 
-  const signalCacheInput = { prompt, model: geminiModel, vertexai: geminiVertexai };
+  const signalCacheInput = {
+    prompt,
+    memory: memoryContext?.memories ?? [],
+    model: geminiModel,
+    vertexai: geminiVertexai,
+  };
   const cached = await getCachedEffect<{ signal: SignalPacket }>("gemini-signal", signalCacheInput);
   if (cached) {
     const signal = normalizeGeminiSignal(cached.output.signal, prompt);
@@ -627,6 +773,9 @@ async function resolveSignal(prompt: string): Promise<{
                 "Classify this request for Signal UI. Return JSON only. " +
                 "Allowed render intents: revenue, competitors, pipeline, summary. " +
                 "Allowed preferences: presentation=visual|table|brief, tone=calm|sharp, renderer=dom|fabric|voice, component=crystal|ledger|brief. " +
+                (memoryContext?.memories.length
+                  ? `Durable user memory: ${memoryContext.memories.join("; ")}. `
+                  : "") +
                 `Request: ${prompt}`,
             },
           ],
@@ -718,16 +867,111 @@ function fallbackGrounding(): Grounding {
   };
 }
 
+async function synthesizeVoice(text: string, voiceName: string): Promise<Buffer> {
+  if (!gemini) {
+    throw new Error("GEMINI_API_KEY is not configured");
+  }
+
+  const input = { text, voiceName, model: geminiTtsModel, vertexai: geminiVertexai };
+  const cached = await getCachedEffect<{
+    wavBase64: string;
+    mimeType: string;
+    sourceMimeType: string;
+  }>("gemini-tts", input);
+  if (cached) {
+    return Buffer.from(cached.output.wavBase64, "base64");
+  }
+
+  const response = await gemini.models.generateContent({
+    model: geminiTtsModel,
+    contents: [{ role: "user", parts: [{ text }] }],
+    config: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName },
+        },
+      },
+    },
+  });
+  const audioPart = response.candidates?.[0]?.content?.parts?.find(
+    (part) => Boolean(part.inlineData?.data),
+  );
+  const encodedAudio = audioPart?.inlineData?.data;
+  if (!encodedAudio) {
+    throw new Error("Gemini TTS returned no audio data");
+  }
+
+  const sourceMimeType = audioPart.inlineData?.mimeType ?? "audio/l16; rate=24000; channels=1";
+  const pcm = Buffer.from(encodedAudio, "base64");
+  const wav = pcmToWav(pcm, parsePcmAudioMime(sourceMimeType));
+  await cacheEffect(
+    "gemini-tts",
+    input,
+    {
+      mimeType: "audio/wav",
+      sourceMimeType,
+      wavBase64: wav.toString("base64"),
+    },
+    false,
+  );
+  return wav;
+}
+
+function parsePcmAudioMime(mimeType: string) {
+  const rate = Number(/rate=(\d+)/i.exec(mimeType)?.[1] ?? 24000);
+  const channels = Number(/channels=(\d+)/i.exec(mimeType)?.[1] ?? 1);
+  return {
+    sampleRate: Number.isFinite(rate) ? rate : 24000,
+    channels: Number.isFinite(channels) ? channels : 1,
+    sampleWidth: 2,
+  };
+}
+
+function pcmToWav(
+  pcm: Buffer,
+  {
+    sampleRate,
+    channels,
+    sampleWidth,
+  }: { sampleRate: number; channels: number; sampleWidth: number },
+) {
+  const header = Buffer.alloc(44);
+  const byteRate = sampleRate * channels * sampleWidth;
+  const blockAlign = channels * sampleWidth;
+
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(sampleWidth * 8, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+
+  return Buffer.concat([header, pcm]);
+}
+
 async function getCachedEffect<T>(kind: string, input: object) {
   const key = effectKey(kind, input);
   if (redis.client && redis.connected) {
     const cached = await redis.client.get(`signal:effect:${key}`);
-    if (cached) return { key, output: JSON.parse(cached) as T };
+    if (cached) {
+      await markEffectReused(kind, key);
+      return { key, output: JSON.parse(cached) as T };
+    }
   }
   const row = db.prepare("SELECT output FROM effects WHERE key = ?").get(key) as
     | { output: string }
     | undefined;
-  return row ? { key, output: JSON.parse(row.output) as T } : null;
+  if (!row) return null;
+  await markEffectReused(kind, key);
+  return { key, output: JSON.parse(row.output) as T };
 }
 
 async function cacheEffect(kind: string, input: object, output: unknown, reused: boolean) {
@@ -741,6 +985,14 @@ async function cacheEffect(kind: string, input: object, output: unknown, reused:
   }
   await writeRedisStream("effect", { kind, key, reused });
   return key;
+}
+
+async function markEffectReused(kind: string, key: string) {
+  db.prepare("UPDATE effects SET reused = 1, created_at = ? WHERE key = ?").run(
+    new Date().toISOString(),
+    key,
+  );
+  await writeRedisStream("effect", { kind, key, reused: true });
 }
 
 function effectKey(kind: string, input: object) {
@@ -758,13 +1010,82 @@ function hostname(url: string) {
 async function remember(world: WorldId, key: string, value: string) {
   const memory = { ...(redis.memory.get(world) ?? {}), [key]: value };
   redis.memory.set(world, memory);
+  await writeAgentMemory(world, key, value);
+  await cacheEffect(
+    "curator-memory",
+    { world, key },
+    {
+      value,
+      provider: agentMemoryStatus.connected ? "iris" : "redis-hash",
+    },
+    false,
+  );
   if (!redis.client || !redis.connected) return;
   await redis.client.hSet(`signal:memory:${world}`, key, value);
   await writeRedisStream("memory", { world, key, value });
-  await redis.client.publish(
-    "signal:events",
-    JSON.stringify({ world, type: "memory", key, value }),
-  );
+  await redis.client.publish("signal:events", JSON.stringify({ world, type: "memory", key, value }));
+}
+
+async function writeAgentMemory(world: WorldId, key: string, value: string) {
+  if (!agentMemory || !agentMemoryStatus.connected) return;
+  const text = `Signal UI ${world} user preference: ${key}=${value}`;
+  const memory: MemoryRecord = {
+    id: createHash("sha256").update(`${world}:${key}:${value}`).digest("hex").slice(0, 24),
+    text,
+    memory_type: "semantic" as MemoryRecord["memory_type"],
+    topics: ["signal-ui", "preferences", key],
+    entities: [key, value],
+    user_id: world,
+    namespace: agentMemoryNamespace,
+  };
+  try {
+    await agentMemory.createLongTermMemory([memory], { namespace: agentMemoryNamespace });
+    await agentMemory.putWorkingMemory(
+      `signal:${world}`,
+      {
+        user_id: world,
+        namespace: agentMemoryNamespace,
+        data: { preferences: redis.memory.get(world) ?? {} },
+      },
+      { namespace: agentMemoryNamespace, background: true },
+    );
+  } catch (error) {
+    agentMemoryStatus.connected = false;
+    agentMemoryStatus.error = error instanceof Error ? error.message : String(error);
+    console.warn("[agent-memory] write skipped:", agentMemoryStatus.error);
+  }
+}
+
+async function retrieveMemoryContext(world: WorldId, prompt: string): Promise<MemoryContext | undefined> {
+  if (agentMemory && agentMemoryStatus.connected) {
+    try {
+      const results = await agentMemory.searchLongTermMemory({
+        text: prompt,
+        namespace: { eq: agentMemoryNamespace },
+        userId: new UserId({ eq: world }),
+        topics: new Topics({ any: ["signal-ui", "preferences"] }),
+        limit: 5,
+      });
+      const memories = results.memories.map((memory) => memory.text).filter(Boolean);
+      if (memories.length) {
+        const context: MemoryContext = { provider: "iris", memories };
+        await cacheEffect("builder-memory", { world, prompt, provider: "iris" }, context, false);
+        return context;
+      }
+    } catch (error) {
+      agentMemoryStatus.connected = false;
+      agentMemoryStatus.error = error instanceof Error ? error.message : String(error);
+      console.warn("[agent-memory] retrieval skipped:", agentMemoryStatus.error);
+    }
+  }
+
+  const localMemory = redis.memory.get(world) ?? {};
+  const memories = Object.entries(localMemory).map(([key, value]) => `${key}=${value}`);
+  if (!memories.length) return undefined;
+
+  const context: MemoryContext = { provider: "redis-hash", memories };
+  await cacheEffect("builder-memory", { world, prompt, provider: "redis-hash" }, context, false);
+  return context;
 }
 
 async function hydrateRedisMemory() {

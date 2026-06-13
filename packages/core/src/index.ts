@@ -192,11 +192,21 @@ export type WorldState = {
     model: string;
     reused: boolean;
     grounded: boolean;
+    memory?: {
+      provider: "iris" | "redis-hash";
+      count: number;
+    };
   } | null;
   redis: {
     configured: boolean;
     connected: boolean;
     memory: Record<string, string>;
+    agentMemory: {
+      configured: boolean;
+      connected: boolean;
+      namespace: string;
+      error?: string;
+    };
   };
 };
 

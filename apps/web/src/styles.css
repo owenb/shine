@@ -421,6 +421,7 @@ button {
   height: 14px;
   cursor: pointer;
   outline: 0;
+  touch-action: none;
 }
 
 .scrub-track::before {
@@ -441,6 +442,7 @@ button {
   height: 2px;
   border-radius: 999px;
   background: var(--accent);
+  transition: width 120ms ease;
 }
 
 .scrub-thumb {
@@ -452,6 +454,20 @@ button {
   border-radius: 999px;
   background: var(--accent);
   box-shadow: 0 0 0 4px rgba(22, 119, 255, 0.1);
+  transition:
+    left 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.scrub-track.dragging .scrub-fill,
+.scrub-track.dragging .scrub-thumb {
+  transition: none;
+}
+
+.scrub-track.dragging .scrub-thumb {
+  transform: translateX(-50%) scale(1.18);
+  box-shadow: 0 0 0 7px rgba(22, 119, 255, 0.12);
 }
 
 .scrubber button {
