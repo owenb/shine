@@ -17,13 +17,33 @@ import {
   useCopilotKit,
 } from "@copilotkit/react-core/v2";
 import { signalCatalog } from "./a2ui-catalog";
-import { isWorldId, worlds, type WorldId, type WorldState } from "@sig/core";
+import { isWorldId, worlds, type Receipt, type WorldId, type WorldState } from "@sig/core";
 import { FabricSurface } from "./FabricSurface";
 import { VoiceSurface } from "./VoiceSurface";
 
 const worldLabels: Record<WorldId, string> = {
   "world-a": "World A",
   "world-b": "World B",
+};
+
+type FlightEffect = {
+  world: WorldId;
+  tx: number;
+  kind: string;
+  input: unknown;
+  output: unknown;
+  reused: boolean;
+  at: string;
+};
+
+type FlightRecorder = {
+  world: WorldId;
+  headTx: number;
+  selectedTx: number;
+  redis: WorldState["redis"];
+  linkup: WorldState["linkup"];
+  receipts: Array<Receipt & { summary?: string }>;
+  effects: FlightEffect[];
 };
 
 export function App() {
@@ -47,6 +67,7 @@ function SignalApp() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
+  const [flight, setFlight] = useState<FlightRecorder | null>(null);
   const [componentStyle, setComponentStyle] = useState<CSSProperties | null>(null);
   const stateCache = useRef(new Map<string, WorldState>());
   const inflightState = useRef(new Map<string, Promise<WorldState>>());
@@ -99,6 +120,21 @@ function SignalApp() {
     });
     return () => events.close();
   }, [world, atTx, cacheWorldState]);
+
+  useEffect(() => {
+    if (!state) return;
+    let cancelled = false;
+    void loadFlight(world, state.selectedTx)
+      .then((next) => {
+        if (!cancelled) setFlight(next);
+      })
+      .catch(() => {
+        if (!cancelled) setFlight(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [world, state?.selectedTx]);
 
   const timeline = state?.timeline ?? [];
   const timelineKey = useMemo(() => timeline.map((item) => item.tx).join(","), [timeline]);
@@ -239,6 +275,8 @@ function SignalApp() {
           <SurfaceSwitch state={state} />
         </section>
 
+        <FlightRecorderPanel state={state} flight={flight} />
+
         <section className="composer-wrap" aria-label="Command composer">
           <div className="composer">
             <input
@@ -261,7 +299,7 @@ function SignalApp() {
             </button>
           </div>
 
-          {error ? <p className="composer-error">Gemini failed: {error}</p> : null}
+          {error ? <p className="composer-error">Agent failed: {error}</p> : null}
 
           <div className="scrubber">
             <span>{state?.surface?.data.txLabel ?? "tx 000"}</span>
@@ -314,6 +352,90 @@ function SignalApp() {
   );
 }
 
+function FlightRecorderPanel({
+  state,
+  flight,
+}: {
+  state: WorldState | null;
+  flight: FlightRecorder | null;
+}) {
+  const agent = state?.agent;
+  const memory = Object.entries(state?.redis.memory ?? {}).slice(0, 3);
+  const receipts = (flight?.receipts.length ? flight.receipts : state?.receipts ?? []).slice(0, 3);
+  const effects = (flight?.effects ?? []).slice(0, 4);
+  const selectedTx = flight?.selectedTx ?? state?.selectedTx ?? 0;
+
+  return (
+    <aside className="flight-panel" aria-label="Flight Recorder">
+      <div className="flight-head">
+        <span>Flight</span>
+        <strong>tx {String(selectedTx).padStart(3, "0")}</strong>
+      </div>
+
+      <div className="flight-badges" aria-label="Agent proof">
+        <ProofBadge label={agent?.provider ?? "agent"} value={agent?.model ? compactModel(agent.model) : "waiting"} />
+        <ProofBadge label="cache" value={agent?.reused ? "reused" : "fresh"} active={Boolean(agent?.reused)} />
+        <ProofBadge label="LinkUp" value={agent?.grounded ? "grounded" : state?.linkup.configured ? "ready" : "no key"} active={Boolean(agent?.grounded)} />
+        <ProofBadge
+          label="memory"
+          value={agent?.memory ? `${agent.memory.provider} ${agent.memory.count}` : `${memory.length}`}
+          active={Boolean(agent?.memory?.count)}
+        />
+      </div>
+
+      <div className="flight-memory" aria-label="Redis memory">
+        <span className={state?.redis.connected ? "flight-dot on" : "flight-dot"} />
+        <span>Redis</span>
+        {memory.length ? (
+          memory.map(([key, value]) => (
+            <mark key={key}>
+              {key}:{value}
+            </mark>
+          ))
+        ) : (
+          <mark>empty</mark>
+        )}
+        <mark>{state?.redis.agentMemory.connected ? "Iris on" : "Iris off"}</mark>
+      </div>
+
+      <div className="flight-list" aria-label="Receipts">
+        {receipts.map((receipt) => (
+          <div key={`${receipt.tx}-${receipt.code}`} className="flight-line">
+            <span>{receipt.code.replace(/_/g, " ").toLowerCase()}</span>
+            <strong>{String(receipt.tx).padStart(3, "0")}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="flight-effects" aria-label="Effects">
+        {effects.map((effect) => (
+          <div key={`${effect.tx}-${effect.kind}-${effect.at}`} className="flight-line">
+            <span>{effect.kind.replace(/^gemini-/, "")}</span>
+            <strong>{effect.reused ? "reused" : `tx ${String(effect.tx).padStart(3, "0")}`}</strong>
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function ProofBadge({
+  label,
+  value,
+  active = false,
+}: {
+  label: string;
+  value: string;
+  active?: boolean;
+}) {
+  return (
+    <span className={active ? "proof-badge active" : "proof-badge"}>
+      <small>{label}</small>
+      {value}
+    </span>
+  );
+}
+
 function SurfaceSwitch({ state }: { state: WorldState | null }) {
   if (!state?.surface) {
     return <div className="empty-widget" />;
@@ -339,16 +461,27 @@ type ReadyWorldState = WorldState & { surface: NonNullable<WorldState["surface"]
 
 function DomSurface({ state }: { state: ReadyWorldState }) {
   const { processMessages, clearSurfaces } = useA2UI();
+  const createdSurface = useRef(false);
 
   useEffect(() => {
-    clearSurfaces();
     if (state.surface.ops) {
-      processMessages(state.surface.ops);
+      const ops = createdSurface.current
+        ? state.surface.ops.filter((op) => !("createSurface" in op))
+        : state.surface.ops;
+      processMessages(ops);
+      createdSurface.current = true;
     }
-  }, [clearSurfaces, processMessages, state.selectedTx, state.surface.ops]);
+  }, [processMessages, state.surface.ops]);
+
+  useEffect(() => {
+    return () => {
+      clearSurfaces();
+      createdSurface.current = false;
+    };
+  }, [clearSurfaces]);
 
   return (
-    <div className="surface-stage" key={`${state.world}-${state.selectedTx}`}>
+    <div className="surface-stage">
       <A2UIRenderer surfaceId={state.surface.surfaceId} fallback={<div className="empty-widget" />} />
     </div>
   );
@@ -358,6 +491,11 @@ async function loadState(world: WorldId, atTx: number | null) {
   const params = new URLSearchParams({ world });
   if (atTx !== null) params.set("atTx", String(atTx));
   return fetch(`/api/state?${params}`).then((res) => res.json() as Promise<WorldState>);
+}
+
+async function loadFlight(world: WorldId, atTx: number) {
+  const params = new URLSearchParams({ world, atTx: String(atTx) });
+  return fetch(`/api/flight?${params}`).then((res) => res.json() as Promise<FlightRecorder>);
 }
 
 async function loadStateCached(
@@ -394,6 +532,10 @@ function stateCacheKey(world: WorldId, atTx: number | null) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function compactModel(model: string) {
+  return model.replace(/^gemini-/, "").replace(/-flash/, " flash");
 }
 
 function isWorldState(value: unknown): value is WorldState {

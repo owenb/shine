@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type { SceneNode, SignalScene, SignalSurface } from "@sig/core";
 
@@ -21,6 +21,12 @@ type ClothConstraint = {
   rest: number;
 };
 
+type FabricRuntime = {
+  textureCanvas: HTMLCanvasElement;
+  texture: THREE.CanvasTexture;
+  sceneGraph: { current: SignalScene };
+};
+
 export function FabricSurface({
   surface,
   scene: signalScene,
@@ -29,6 +35,9 @@ export function FabricSurface({
   scene: SignalScene | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const runtimeRef = useRef<FabricRuntime | null>(null);
+  const sceneGraph = useMemo(() => signalScene ?? fallbackScene(surface), [signalScene, surface]);
+  const sceneSignature = useMemo(() => JSON.stringify(sceneGraph), [sceneGraph]);
 
   useEffect(() => {
     const host = ref.current;
@@ -40,8 +49,8 @@ export function FabricSurface({
     const textureCanvas = document.createElement("canvas");
     textureCanvas.width = width * 2;
     textureCanvas.height = height * 2;
-    const sceneGraph = signalScene ?? fallbackScene(surface);
-    drawScene(textureCanvas, sceneGraph);
+    const sceneGraphRef = { current: sceneGraph };
+    drawScene(textureCanvas, sceneGraphRef.current);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
@@ -93,9 +102,10 @@ export function FabricSurface({
     };
 
     const hotspotFromUv = (uv: THREE.Vector2) => {
-      const x = uv.x * sceneGraph.width;
-      const y = (1 - uv.y) * sceneGraph.height;
-      return sceneGraph.hotspots.find(
+      const activeScene = sceneGraphRef.current;
+      const x = uv.x * activeScene.width;
+      const y = (1 - uv.y) * activeScene.height;
+      return activeScene.hotspots.find(
         (hotspot) =>
           x >= hotspot.x &&
           x <= hotspot.x + hotspot.width &&
@@ -160,6 +170,7 @@ export function FabricSurface({
     renderer.domElement.addEventListener("pointerup", onPointerUp);
     renderer.domElement.addEventListener("pointercancel", onPointerUp);
     renderer.domElement.style.cursor = "grab";
+    runtimeRef.current = { textureCanvas, texture, sceneGraph: sceneGraphRef };
 
     const animate = () => {
       frame = requestAnimationFrame(animate);
@@ -183,8 +194,17 @@ export function FabricSurface({
       texture.dispose();
       renderer.dispose();
       renderer.domElement.remove();
+      runtimeRef.current = null;
     };
-  }, [surface, signalScene]);
+  }, []);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    runtime.sceneGraph.current = sceneGraph;
+    drawScene(runtime.textureCanvas, sceneGraph);
+    runtime.texture.needsUpdate = true;
+  }, [sceneSignature]);
 
   return (
     <div className="surface-stage fabric-stage" ref={ref} aria-label="Fabric renderer">
@@ -345,8 +365,9 @@ function drawScene(canvas: HTMLCanvasElement, scene: SignalScene) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const scale = canvas.width / scene.width;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.scale(scale, scale);
-  ctx.clearRect(0, 0, scene.width, scene.height);
 
   for (const node of scene.nodes) {
     drawNode(ctx, node);

@@ -9,16 +9,17 @@ export function VoiceSurface({
   children: ReactNode;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const { title, subtitle, stat } = surface.data;
 
   useEffect(() => {
     const controller = new AbortController();
     let audioUrl: string | null = null;
     const summary = [
-      surface.data.title,
-      surface.data.subtitle,
-      surface.data.stat.label,
-      surface.data.stat.value,
-      surface.data.stat.delta,
+      title,
+      subtitle,
+      stat.label,
+      stat.value,
+      stat.delta,
     ]
       .filter(Boolean)
       .join(". ");
@@ -58,7 +59,7 @@ export function VoiceSurface({
       audioRef.current = null;
       if (audioUrl) URL.revokeObjectURL(audioUrl);
     };
-  }, [surface.surfaceId, surface.data.title, surface.data.subtitle, surface.data.stat]);
+  }, [surface.surfaceId, title, subtitle, stat.label, stat.value, stat.delta]);
 
   return (
     <div className="voice-stage">
