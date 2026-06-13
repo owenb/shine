@@ -1,21 +1,59 @@
+/* ============================================================================
+   Shine — design system
+   Light, made minimal. Glass over a luminous aurora. Every pixel earns its place.
+   ========================================================================== */
+
 :root {
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display",
+  /* Type */
+  --font:
+    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display",
     "Segoe UI", sans-serif;
-  color: #111114;
-  background: #ffffff;
+
+  /* Ink + neutrals */
+  --ink: #0c0d11;
+  --ink-2: #1a1b21;
+  --muted: #6f7078;
+  --faint: #9a9ba4;
+  --line: rgba(16, 18, 27, 0.07);
+  --line-strong: rgba(16, 18, 27, 0.12);
+
+  /* Surfaces (glass) */
+  --glass: rgba(255, 255, 255, 0.66);
+  --glass-strong: rgba(255, 255, 255, 0.8);
+  --solid: #ffffff;
+
+  /* Accent (overridden per-world by the executed component module) */
+  --accent: #1677ff;
+  --accent-soft: rgba(22, 119, 255, 0.12);
+  --accent-line: rgba(22, 119, 255, 0.4);
+  --green: #14b083;
+
+  /* Radii */
+  --r-sm: 10px;
+  --r: 16px;
+  --r-lg: 22px;
+  --pill: 999px;
+  --component-radius: 20px;
+
+  /* Shadows — layered, soft, premium */
+  --sh-1: 0 1px 2px rgba(16, 18, 28, 0.04), 0 2px 10px rgba(16, 18, 28, 0.05);
+  --sh-2: 0 10px 34px rgba(16, 18, 28, 0.08), 0 2px 8px rgba(16, 18, 28, 0.05);
+  --sh-float: 0 30px 80px rgba(16, 18, 28, 0.14), 0 10px 26px rgba(16, 18, 28, 0.06);
+  --component-shadow: 0 36px 90px rgba(16, 18, 28, 0.1), 0 8px 24px rgba(16, 18, 28, 0.05);
+
+  /* Motion */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --spring: cubic-bezier(0.34, 1.4, 0.5, 1);
+  --t-fast: 150ms;
+  --t: 280ms;
+  --t-slow: 560ms;
+
+  color: var(--ink);
+  font-family: var(--font);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --line: #e8e8ec;
-  --muted: #777986;
-  --soft: #f7f7f8;
-  --accent: #1677ff;
-  --green: #1db36b;
-  --component-radius: 12px;
-  --component-shadow:
-    0 40px 90px rgba(20, 24, 32, 0.12),
-    0 8px 24px rgba(20, 24, 32, 0.05);
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
@@ -25,115 +63,196 @@
 html,
 #root {
   height: 100%;
-  min-height: 100%;
   overflow: hidden;
-  background: #ffffff;
 }
 
 body {
   margin: 0;
-  min-width: 320px;
   min-height: 100vh;
   overflow: hidden;
-  background: #ffffff;
-}
-
-cpk-web-inspector {
-  pointer-events: none !important;
+  background: #fbfbfd;
 }
 
 button,
 input {
   font: inherit;
+  color: inherit;
 }
 
 button {
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.app-shell {
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Hide CopilotKit's injected inspector chrome — Shine owns the surface. */
+cpk-web-inspector {
+  display: none !important;
+}
+
+/* ── Ambient aurora ──────────────────────────────────────────────────────── */
+.shine-bg {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
   height: 100vh;
-  min-height: 100vh;
-  position: relative;
-  display: grid;
-  grid-template-rows: 56px 1fr auto;
-  overflow: hidden;
-  background: #ffffff;
+  z-index: 0;
+  display: block;
+  pointer-events: none;
 }
 
+.shine-bg--fallback {
+  background:
+    radial-gradient(60% 50% at 22% 18%, rgba(120, 140, 255, 0.16), transparent 70%),
+    radial-gradient(55% 45% at 82% 28%, rgba(190, 150, 255, 0.14), transparent 70%),
+    radial-gradient(60% 55% at 50% 92%, rgba(150, 235, 210, 0.12), transparent 72%),
+    #ffffff;
+}
+
+/* ── Shell ───────────────────────────────────────────────────────────────── */
+.app-shell {
+  position: relative;
+  z-index: 1;
+  height: 100vh;
+  display: grid;
+  grid-template-rows: 60px 1fr auto;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* ── Topbar ──────────────────────────────────────────────────────────────── */
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 28px;
+  padding: 0 24px;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
+  gap: 9px;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.brand-mark {
+  width: 16px;
+  height: 16px;
+  border-radius: 6px;
+  background:
+    radial-gradient(120% 120% at 30% 20%, #fff 0%, rgba(255, 255, 255, 0) 45%),
+    conic-gradient(from 210deg, #1677ff, #7b5bff, #14b083, #1677ff);
+  box-shadow:
+    0 2px 8px rgba(22, 119, 255, 0.34),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5);
 }
 
 .memory-dot {
   width: 6px;
   height: 6px;
-  border-radius: 999px;
-  background: #d7d8dd;
+  margin-left: 1px;
+  border-radius: var(--pill);
+  background: #d4d5db;
+  transition: background var(--t);
 }
 
 .memory-dot.on {
   background: var(--green);
+  box-shadow: 0 0 0 0 rgba(20, 176, 131, 0.5);
+  animation: dot-pulse 2.6s var(--ease) infinite;
 }
 
+/* ── World toggle (segmented, with a sliding thumb) ──────────────────────── */
 .world-toggle {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
   padding: 3px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(12px);
+  border-radius: var(--pill);
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: var(--sh-1);
+}
+
+.world-toggle-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: var(--pill);
+  background: var(--solid);
+  box-shadow: 0 1px 6px rgba(16, 18, 28, 0.12);
+  transition: transform var(--spring) 420ms;
+}
+
+.world-toggle[data-active="world-b"] .world-toggle-thumb {
+  transform: translateX(100%);
 }
 
 .world-toggle button {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 66px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--pill);
   background: transparent;
-  color: #777986;
-  padding: 6px 10px;
-  font-size: 12px;
-  line-height: 1;
+  color: var(--muted);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  transition: color var(--t);
 }
 
 .world-toggle button.selected {
-  background: #ffffff;
-  color: var(--accent);
-  box-shadow: 0 1px 7px rgba(22, 119, 255, 0.12);
+  color: var(--ink);
 }
 
+/* ── Canvas + surface ────────────────────────────────────────────────────── */
 .canvas {
   display: grid;
   place-items: center;
-  padding: 7vh 24px 190px;
+  padding: 6vh 24px 184px;
+  overflow: hidden;
+  transition: filter var(--t-slow) var(--ease);
+}
+
+/* Temporal mode — being in the past reads as a faint drain of colour. */
+.app-shell[data-live="false"] .canvas {
+  filter: saturate(0.74) brightness(0.985);
 }
 
 .surface-stage {
-  animation: float-in 480ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: surface-in var(--t-slow) var(--ease);
 }
 
 .signal-widget {
   width: min(680px, calc(100vw - 44px));
   min-height: 280px;
-  padding: 34px;
-  border: 1px solid rgba(17, 17, 20, 0.08);
+  padding: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
   border-radius: var(--component-radius);
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--glass-strong);
   box-shadow: var(--component-shadow);
-  backdrop-filter: blur(22px);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  transition:
+    transform var(--t) var(--ease),
+    box-shadow var(--t) var(--ease);
+}
+
+.signal-widget:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 44px 100px rgba(16, 18, 28, 0.14), 0 12px 28px rgba(16, 18, 28, 0.07);
 }
 
 .signal-widget--ledger {
@@ -148,10 +267,10 @@ button {
 .widget-copy h1,
 .ledger-card h1 {
   margin: 0;
-  font-size: clamp(32px, 6vw, 52px);
-  line-height: 0.98;
-  letter-spacing: 0;
-  font-weight: 650;
+  font-size: clamp(30px, 5.4vw, 50px);
+  line-height: 1;
+  letter-spacing: -0.025em;
+  font-weight: 640;
 }
 
 .widget-copy p {
@@ -159,38 +278,67 @@ button {
   max-width: 440px;
   color: var(--muted);
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.55;
+  letter-spacing: -0.006em;
 }
 
+/* Metric */
 .metric-card p {
-  margin: 0 0 18px;
+  margin: 0 0 16px;
   color: var(--muted);
   font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
 }
 
 .metric-card div {
   display: flex;
   align-items: flex-end;
-  gap: 18px;
+  gap: 16px;
 }
 
 .metric-card strong {
-  font-size: clamp(64px, 12vw, 116px);
-  line-height: 0.84;
-  letter-spacing: 0;
-  font-weight: 650;
+  font-size: clamp(60px, 11vw, 112px);
+  line-height: 0.82;
+  letter-spacing: -0.04em;
+  font-weight: 660;
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-card span {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   color: var(--green);
   font-size: 16px;
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
+/* Odometer roll for a changing value (slot-style rise + whisper of blur). */
+.roll {
+  position: relative;
+  display: inline-flex;
+  vertical-align: baseline;
+}
+
+.roll-in {
+  display: inline-block;
+  animation: roll-in 480ms var(--ease);
+}
+
+.roll-out {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-block;
+  pointer-events: none;
+  animation: roll-out 480ms var(--ease) forwards;
+}
+
+/* Trend */
 .trend-card {
   display: grid;
-  gap: 32px;
+  gap: 30px;
 }
 
 .mini-chart {
@@ -200,48 +348,66 @@ button {
 }
 
 .mini-chart path {
-  stroke: #ececf0;
-  stroke-width: 2;
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
 }
 
 .mini-chart polyline {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 4;
+  stroke-width: 3.5;
   stroke-linecap: round;
   stroke-linejoin: round;
+  filter: drop-shadow(0 6px 14px var(--accent-soft));
+  stroke-dasharray: 1400;
+  stroke-dashoffset: 0;
+  animation: draw-line 1.1s var(--ease);
 }
 
 .mini-chart circle {
-  fill: #ffffff;
+  fill: var(--solid);
   stroke: var(--accent);
   stroke-width: 3;
 }
 
+.mini-chart circle:last-of-type {
+  filter: drop-shadow(0 0 10px var(--accent-soft));
+}
+
+/* Ledger */
 .ledger-card table {
   width: 100%;
-  margin-top: 28px;
+  margin-top: 26px;
   border-collapse: collapse;
 }
 
 .ledger-card tr {
   border-top: 1px solid var(--line);
+  transition: background var(--t-fast);
+}
+
+.ledger-card tr:hover {
+  background: rgba(16, 18, 28, 0.018);
 }
 
 .ledger-card td {
-  padding: 16px 0;
-  color: #19191d;
+  padding: 15px 6px;
+  color: var(--ink-2);
   font-size: 14px;
+  letter-spacing: -0.006em;
+  font-variant-numeric: tabular-nums;
 }
 
 .ledger-card td:not(:first-child) {
   text-align: right;
+  color: var(--muted);
 }
 
+/* Sources */
 .source-list {
   display: grid;
-  gap: 10px;
-  margin-top: 30px;
+  gap: 2px;
+  margin-top: 26px;
 }
 
 .source-list a {
@@ -252,33 +418,46 @@ button {
   color: inherit;
   text-decoration: none;
   border-top: 1px solid var(--line);
-  padding: 14px 0;
+  padding: 15px 8px;
+  border-radius: var(--r-sm);
+  transition: background var(--t-fast), padding-left var(--t) var(--ease);
+}
+
+.source-list a:hover {
+  background: rgba(16, 18, 28, 0.025);
+  padding-left: 14px;
 }
 
 .source-list span {
   font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .source-list small {
-  color: var(--muted);
+  color: var(--faint);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .empty-widget {
   width: min(560px, calc(100vw - 44px));
   height: 260px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.72);
+  border-radius: var(--component-radius);
+  background: var(--glass);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--sh-2);
+  animation: shimmer 2.4s var(--ease) infinite;
 }
 
+/* ── Fabric + voice renderers ────────────────────────────────────────────── */
 .fabric-stage {
-  width: min(760px, calc(100vw - 32px));
+  width: min(780px, calc(100vw - 32px));
   aspect-ratio: 16 / 9;
   display: grid;
   place-items: center;
-  filter: drop-shadow(0 44px 72px rgba(20, 24, 32, 0.18));
+  filter: drop-shadow(0 50px 80px rgba(16, 18, 28, 0.2));
 }
 
 .fabric-stage .empty-widget {
@@ -299,51 +478,60 @@ button {
 
 .voice-wave {
   position: absolute;
-  bottom: -22px;
+  bottom: -26px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  opacity: 0.68;
+  opacity: 0.7;
 }
 
 .voice-wave span {
   display: block;
   width: 3px;
-  height: 10px;
-  border-radius: 999px;
+  height: 11px;
+  border-radius: var(--pill);
   background: var(--accent);
-  animation: voice-pulse 900ms ease-in-out infinite;
+  animation: voice-pulse 900ms var(--ease) infinite;
 }
 
 .voice-wave span:nth-child(2) {
-  animation-delay: 120ms;
+  animation-delay: 130ms;
 }
 
 .voice-wave span:nth-child(3) {
-  animation-delay: 240ms;
+  animation-delay: 260ms;
 }
 
+/* ── Composer ────────────────────────────────────────────────────────────── */
 .composer-wrap {
   position: fixed;
   left: 50%;
-  bottom: 28px;
+  bottom: 26px;
   transform: translateX(-50%);
   width: min(660px, calc(100vw - 28px));
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  z-index: 2;
 }
 
 .composer {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid rgba(17, 17, 20, 0.1);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 18px 60px rgba(20, 24, 32, 0.12);
-  backdrop-filter: blur(24px);
+  gap: 6px;
+  padding: 7px 7px 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--glass-strong);
+  box-shadow: var(--sh-float);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  transition: box-shadow var(--t), border-color var(--t), transform var(--t) var(--ease);
+}
+
+.composer:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: var(--sh-float), 0 0 0 4px var(--accent-soft);
 }
 
 .composer input {
@@ -352,75 +540,107 @@ button {
   outline: 0;
   background: transparent;
   padding: 0 14px;
-  color: #111114;
   font-size: 15px;
+  letter-spacing: -0.01em;
 }
 
 .composer input::placeholder {
-  color: #a0a2aa;
+  color: var(--faint);
 }
 
 .composer button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
-  border: 1px solid rgba(22, 119, 255, 0.5);
-  border-radius: 999px;
-  background: #ffffff;
-  color: var(--accent);
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--pill);
+  background: var(--accent);
+  color: #fff;
   padding: 0;
-  box-shadow: 0 8px 24px rgba(22, 119, 255, 0.1);
+  box-shadow: 0 6px 18px var(--accent-soft);
+  transition: transform var(--t-fast) var(--spring), filter var(--t-fast), opacity var(--t-fast);
+}
+
+.composer button:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.composer button:active:not(:disabled) {
+  transform: scale(0.9);
 }
 
 .composer button svg {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
+  transition: transform var(--t-fast) var(--ease);
+}
+
+.composer button:hover:not(:disabled) svg {
+  transform: translateY(-1px);
 }
 
 .composer button path {
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.8;
+  stroke-width: 1.9;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.sending-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: currentColor;
+.composer button:disabled {
+  background: rgba(16, 18, 28, 0.1);
+  color: var(--faint);
+  box-shadow: none;
+  cursor: default;
 }
 
-.composer button:disabled {
-  opacity: 0.38;
+.sending-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--pill);
+  background: currentColor;
+  animation: dot-breathe 900ms var(--ease) infinite;
 }
 
 .composer-error {
-  margin: -2px 14px 0;
-  color: #b42318;
-  font-size: 11px;
-  line-height: 1.35;
+  margin: 0;
+  text-align: center;
+  color: #d6455d;
+  font-size: 12.5px;
+  letter-spacing: -0.005em;
+  animation: surface-in var(--t) var(--ease);
 }
 
+/* ── Scrubber ────────────────────────────────────────────────────────────── */
 .scrubber {
   display: grid;
-  grid-template-columns: 48px 1fr 38px;
+  grid-template-columns: 52px 1fr 40px;
   align-items: center;
-  gap: 8px;
-  padding: 0 2px;
-  color: #a0a2aa;
+  gap: 12px;
+  padding: 0 6px;
+  color: var(--faint);
   font-size: 11px;
+}
+
+.scrubber-tx {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
 }
 
 .scrub-track {
   position: relative;
   width: 100%;
-  height: 14px;
-  cursor: pointer;
+  height: 20px;
+  cursor: grab;
   outline: 0;
+  touch-action: none;
+  container-type: inline-size;
+}
+
+.scrub-track.is-dragging {
+  cursor: grabbing;
 }
 
 .scrub-track::before {
@@ -428,63 +648,166 @@ button {
   position: absolute;
   left: 0;
   right: 0;
-  top: 6px;
+  top: 9px;
   height: 2px;
-  border-radius: 999px;
-  background: #e4e5ea;
+  border-radius: var(--pill);
+  background: rgba(16, 18, 28, 0.1);
 }
 
 .scrub-fill {
   position: absolute;
   left: 0;
-  top: 6px;
+  top: 9px;
+  width: 100%;
   height: 2px;
-  border-radius: 999px;
-  background: var(--accent);
+  border-radius: var(--pill);
+  background: linear-gradient(90deg, var(--accent-soft), var(--accent));
+  transform: scaleX(var(--pos, 0));
+  transform-origin: left center;
 }
 
 .scrub-thumb {
   position: absolute;
-  top: 2px;
-  width: 10px;
-  height: 10px;
-  transform: translateX(-50%);
-  border-radius: 999px;
+  top: 10px;
+  left: 0;
+  width: 11px;
+  height: 11px;
+  /* translateX by container-query width → rides the compositor (no layout). */
+  transform: translateX(calc(var(--pos, 0) * 100cqw)) translate(-50%, -50%);
+  border-radius: var(--pill);
   background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(22, 119, 255, 0.1);
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 2px 8px var(--accent-soft);
+  transition: box-shadow var(--t), width var(--t-fast), height var(--t-fast);
 }
 
-.scrubber button {
+.scrub-track:focus-visible .scrub-thumb,
+.scrub-track.is-dragging .scrub-thumb {
+  box-shadow: 0 0 0 6px var(--accent-soft), 0 4px 14px var(--accent-soft);
+}
+
+.scrub-track.is-dragging .scrub-thumb {
+  width: 13px;
+  height: 13px;
+}
+
+/* The fill + thumb glide only when NOT dragging (drag is 1:1 with the pointer). */
+.scrub-track:not(.is-dragging) .scrub-fill {
+  transition: transform var(--t) var(--ease);
+}
+
+.scrub-track:not(.is-dragging) .scrub-thumb {
+  transition:
+    transform var(--t) var(--ease),
+    box-shadow var(--t),
+    width var(--t-fast),
+    height var(--t-fast);
+}
+
+/* Promote to a GPU layer only for the ~1s of an actual drag — never idle. */
+.scrub-track.is-dragging .scrub-fill,
+.scrub-track.is-dragging .scrub-thumb {
+  will-change: transform;
+}
+
+.scrub-ripple {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--pill);
+  background: var(--accent-soft);
+  pointer-events: none;
+  animation: ripple 560ms var(--ease) forwards;
+}
+
+.scrub-live {
   border: 0;
   background: transparent;
-  color: #8a8c94;
+  color: var(--faint);
   font-size: 11px;
+  font-weight: 500;
+  transition: color var(--t);
+  justify-self: end;
 }
 
-.scrubber button.live {
+.scrub-live.is-live {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  color: #111114;
-  font-weight: 650;
+  gap: 6px;
+  color: var(--ink);
+  font-weight: 600;
 }
 
-.scrubber button.live::after {
+.scrub-live.is-live::after {
   content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--pill);
   background: var(--green);
+  box-shadow: 0 0 0 0 rgba(20, 176, 131, 0.5);
+  animation: dot-pulse 2.6s var(--ease) infinite;
 }
 
-@keyframes float-in {
+/* ── Focus ───────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.scrub-track:focus-visible,
+.composer input:focus-visible {
+  outline: none;
+}
+
+/* ── Keyframes ───────────────────────────────────────────────────────────── */
+@keyframes surface-in {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.98);
+    transform: translateY(16px) scale(0.985);
+    filter: blur(6px);
   }
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes draw-line {
+  from {
+    stroke-dashoffset: 1400;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes roll-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.4em);
+    filter: blur(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes roll-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-0.42em);
+    filter: blur(5px);
   }
 }
 
@@ -494,20 +817,73 @@ button {
     transform: scaleY(0.45);
   }
   50% {
-    transform: scaleY(1.35);
+    transform: scaleY(1.4);
   }
 }
 
+@keyframes dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(20, 176, 131, 0.45);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px rgba(20, 176, 131, 0);
+  }
+}
+
+@keyframes dot-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes ripple {
+  from {
+    opacity: 0.55;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(4.4);
+  }
+}
+
+@keyframes shimmer {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 760px) {
   .topbar {
     padding: 0 16px;
   }
-
   .canvas {
     padding-bottom: 176px;
   }
-
   .signal-widget {
-    padding: 26px;
+    padding: 28px;
+  }
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

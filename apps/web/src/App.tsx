@@ -1,10 +1,20 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { A2UIProvider, A2UIRenderer, useA2UI } from "@copilotkit/a2ui-renderer";
 import { CopilotKit } from "@copilotkit/react-core/v2";
 import { signalCatalog } from "./a2ui-catalog";
 import { worlds, type WorldId, type WorldState } from "@sig/core";
 import { FabricSurface } from "./FabricSurface";
 import { VoiceSurface } from "./VoiceSurface";
+import { ShineBackground } from "./ShineBackground";
+import { Scrubber } from "./Scrubber";
 
 const worldLabels: Record<WorldId, string> = {
   "world-a": "World A",
@@ -19,19 +29,58 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [componentStyle, setComponentStyle] = useState<CSSProperties | null>(null);
+  const cacheRef = useRef<Map<string, WorldState>>(new Map());
+  const remember = useCallback((next: WorldState) => {
+    cacheRef.current.set(cacheKey(next.world, next.selectedTx), next);
+  }, []);
 
+  // Resolve the surface for the current world + tx. History is immutable, so we
+  // serve scrubs straight from cache (zero network → the thumb and the surface
+  // move as one). Only a cache miss or going Live touches the server.
   useEffect(() => {
-    void loadState(world, atTx).then(setState);
-  }, [world, atTx]);
+    if (atTx !== null) {
+      const cached = cacheRef.current.get(cacheKey(world, atTx));
+      if (cached) {
+        setState(cached);
+        return;
+      }
+    }
+    const controller = new AbortController();
+    void loadState(world, atTx, controller.signal)
+      .then((next) => {
+        remember(next);
+        setState(next);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [world, atTx, remember]);
 
+  // Live updates only while pinned to head — scrubbing the past is never yanked
+  // forward by a new commit.
   useEffect(() => {
     if (atTx !== null) return;
     const events = new EventSource(`/api/events?world=${world}`);
     events.addEventListener("state", (event) => {
-      setState(JSON.parse((event as MessageEvent).data) as WorldState);
+      const next = JSON.parse((event as MessageEvent).data) as WorldState;
+      remember(next);
+      setState(next);
     });
     return () => events.close();
-  }, [world, atTx]);
+  }, [world, atTx, remember]);
+
+  // Warm the cache for every point in the timeline so the first scrub is already
+  // instant. Keyed on headTx (a stable proxy for "the timeline grew") so it does
+  // not re-scan on every live tick's fresh array reference.
+  useEffect(() => {
+    const controller = new AbortController();
+    for (const item of state?.timeline ?? []) {
+      if (cacheRef.current.has(cacheKey(world, item.tx))) continue;
+      void loadState(world, item.tx, controller.signal)
+        .then((next) => remember(next))
+        .catch(() => {});
+    }
+    return () => controller.abort();
+  }, [world, state?.headTx, remember]);
 
   const timeline = state?.timeline ?? [];
   const selectedIndex = useMemo(() => {
@@ -110,7 +159,12 @@ export function App() {
   function scrub(index: number) {
     const item = timeline[index];
     if (!item || !state) return;
-    setAtTx(item.tx === state.headTx ? null : item.tx);
+    const nextTx = item.tx === state.headTx ? null : item.tx;
+    setAtTx(nextTx);
+    // Pull the state synchronously from cache so the surface updates on the same
+    // frame as the thumb — no waiting on a fetch.
+    const cached = cacheRef.current.get(cacheKey(world, nextTx ?? state.headTx));
+    if (cached) setState(cached);
   }
 
   return (
@@ -121,20 +175,26 @@ export function App() {
       enableInspector={false}
     >
       <A2UIProvider catalog={signalCatalog}>
+      <ShineBackground />
       <main
         className="app-shell"
+        data-live={live ? "true" : "false"}
         style={componentStyle ?? undefined}
       >
         <header className="topbar">
           <div className="brand">
-            Signal UI
+            <span className="brand-mark" aria-hidden="true" />
+            Shine
             <span className={state?.redis.connected ? "memory-dot on" : "memory-dot"} />
           </div>
-          <div className="world-toggle" aria-label="World">
+          <div className="world-toggle" data-active={world} role="radiogroup" aria-label="World">
+            <span className="world-toggle-thumb" aria-hidden="true" />
             {worlds.map((id) => (
               <button
                 key={id}
                 type="button"
+                role="radio"
+                aria-checked={id === world}
                 className={id === world ? "selected" : ""}
                 onClick={() => {
                   setWorld(id);
@@ -175,45 +235,14 @@ export function App() {
 
           {error ? <p className="composer-error">Gemini failed: {error}</p> : null}
 
-          <div className="scrubber">
-            <span>{state?.surface?.data.txLabel ?? "tx 000"}</span>
-            <div
-              className="scrub-track"
-              role="slider"
-              tabIndex={0}
-              aria-label="Transaction scrubber"
-              aria-valuemin={0}
-              aria-valuemax={Math.max(timeline.length - 1, 0)}
-              aria-valuenow={selectedIndex}
-              onPointerDown={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const ratio = (event.clientX - rect.left) / Math.max(rect.width, 1);
-                scrub(Math.round(ratio * Math.max(timeline.length - 1, 0)));
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowLeft") scrub(Math.max(selectedIndex - 1, 0));
-                if (event.key === "ArrowRight") {
-                  scrub(Math.min(selectedIndex + 1, Math.max(timeline.length - 1, 0)));
-                }
-              }}
-            >
-              <div
-                className="scrub-fill"
-                style={{
-                  width: `${timeline.length <= 1 ? 0 : (selectedIndex / (timeline.length - 1)) * 100}%`,
-                }}
-              />
-              <div
-                className="scrub-thumb"
-                style={{
-                  left: `${timeline.length <= 1 ? 0 : (selectedIndex / (timeline.length - 1)) * 100}%`,
-                }}
-              />
-            </div>
-            <button type="button" onClick={() => setAtTx(null)} className={live ? "live" : ""}>
-              Live
-            </button>
-          </div>
+          <Scrubber
+            length={timeline.length}
+            index={selectedIndex}
+            live={live}
+            label={state?.surface?.data.txLabel ?? "tx 000"}
+            onScrub={scrub}
+            onLive={() => setAtTx(null)}
+          />
         </section>
       </main>
       </A2UIProvider>
@@ -246,23 +275,44 @@ type ReadyWorldState = WorldState & { surface: NonNullable<WorldState["surface"]
 
 function DomSurface({ state }: { state: ReadyWorldState }) {
   const { processMessages, clearSurfaces } = useA2UI();
+  const prevKind = useRef<string | null>(null);
+  const created = useRef(false);
 
   useEffect(() => {
-    clearSurfaces();
-    if (state.surface.ops) {
-      processMessages(state.surface.ops);
+    // Tear down only when the surface *shape* changes; scrubbing within one kind
+    // keeps the component instances mounted so values roll instead of flashing.
+    if (prevKind.current !== state.surface.kind) {
+      clearSurfaces();
+      created.current = false;
+      prevKind.current = state.surface.kind;
     }
-  }, [clearSurfaces, processMessages, state.selectedTx, state.surface.ops]);
+    const ops = state.surface.ops ?? [];
+    if (created.current) {
+      // Re-sending createSurface for an existing surface throws "already exists"
+      // and aborts the whole batch — so updateDataModel never runs and the value
+      // freezes. Skip it; replay only the component + data ops.
+      processMessages(ops.filter((op) => !("createSurface" in op)));
+    } else {
+      processMessages(ops);
+      created.current = true;
+    }
+  }, [clearSurfaces, processMessages, state.surface.kind, state.selectedTx, state.surface.ops]);
 
+  // Keyed by world + kind: a kind change replays the enter animation, while
+  // same-kind scrubs keep instances mounted so the metric can roll.
   return (
-    <div className="surface-stage" key={`${state.world}-${state.selectedTx}`}>
+    <div className="surface-stage" key={`${state.world}:${state.surface.kind}`}>
       <A2UIRenderer surfaceId={state.surface.surfaceId} fallback={<div className="empty-widget" />} />
     </div>
   );
 }
 
-async function loadState(world: WorldId, atTx: number | null) {
+function cacheKey(world: WorldId, tx: number) {
+  return `${world}:${tx}`;
+}
+
+async function loadState(world: WorldId, atTx: number | null, signal?: AbortSignal) {
   const params = new URLSearchParams({ world });
   if (atTx !== null) params.set("atTx", String(atTx));
-  return fetch(`/api/state?${params}`).then((res) => res.json() as Promise<WorldState>);
+  return fetch(`/api/state?${params}`, { signal }).then((res) => res.json() as Promise<WorldState>);
 }
