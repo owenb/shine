@@ -2,6 +2,25 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import type { SceneNode, SignalScene, SignalSurface } from "@sig/core";
 
+type ClothParticle = {
+  x: number;
+  y: number;
+  z: number;
+  oldX: number;
+  oldY: number;
+  oldZ: number;
+  baseX: number;
+  baseY: number;
+  baseZ: number;
+  pinned: boolean;
+};
+
+type ClothConstraint = {
+  a: number;
+  b: number;
+  rest: number;
+};
+
 export function FabricSurface({
   surface,
   scene: signalScene,
@@ -36,7 +55,9 @@ export function FabricSurface({
 
     const texture = new THREE.CanvasTexture(textureCanvas);
     texture.colorSpace = THREE.SRGBColorSpace;
-    const geometry = new THREE.PlaneGeometry(5.6, 3.15, 48, 28);
+    const segmentsX = 48;
+    const segmentsY = 28;
+    const geometry = new THREE.PlaneGeometry(5.6, 3.15, segmentsX, segmentsY);
     const material = new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
@@ -45,46 +66,106 @@ export function FabricSurface({
     const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
 
-    const base = geometry.attributes.position.array.slice() as Float32Array;
+    const particles = createClothParticles(geometry, segmentsX, segmentsY);
+    const constraints = createClothConstraints(particles, segmentsX, segmentsY);
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const dragTarget = new THREE.Vector3();
     let pointerX = 0;
     let pointerY = 0;
+    let draggedIndex: number | null = null;
+    let dragStart: { x: number; y: number } | null = null;
+    let dragMoved = false;
     let frame = 0;
-    const onPointerMove = (event: PointerEvent) => {
+
+    const updatePointer = (event: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       pointerX = (event.clientX - rect.left) / rect.width - 0.5;
       pointerY = (event.clientY - rect.top) / rect.height - 0.5;
     };
-    renderer.domElement.addEventListener("pointermove", onPointerMove);
-    const onPointerDown = (event: PointerEvent) => {
+
+    const hitFromEvent = (event: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
-      const x = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * sceneGraph.width;
-      const y = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * sceneGraph.height;
-      const hit = sceneGraph.hotspots.find(
+      pointer.x = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 2 - 1;
+      pointer.y = -(((event.clientY - rect.top) / Math.max(rect.height, 1)) * 2 - 1);
+      raycaster.setFromCamera(pointer, camera);
+      return raycaster.intersectObject(mesh, false)[0];
+    };
+
+    const hotspotFromUv = (uv: THREE.Vector2) => {
+      const x = uv.x * sceneGraph.width;
+      const y = (1 - uv.y) * sceneGraph.height;
+      return sceneGraph.hotspots.find(
         (hotspot) =>
           x >= hotspot.x &&
           x <= hotspot.x + hotspot.width &&
           y >= hotspot.y &&
           y <= hotspot.y + hotspot.height,
       );
-      if (hit?.action.type === "openUrl") {
-        window.open(hit.action.url, "_blank", "noopener,noreferrer");
+    };
+
+    const particleIndexFromUv = (uv: THREE.Vector2) => {
+      const col = Math.round(uv.x * segmentsX);
+      const row = Math.round((1 - uv.y) * segmentsY);
+      return clamp(row, 0, segmentsY) * (segmentsX + 1) + clamp(col, 0, segmentsX);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      updatePointer(event);
+      if (dragStart) {
+        dragMoved ||= Math.hypot(event.clientX - dragStart.x, event.clientY - dragStart.y) > 6;
       }
+      if (draggedIndex !== null) {
+        const hit = hitFromEvent(event);
+        if (hit) {
+          mesh.worldToLocal(dragTarget.copy(hit.point));
+        }
+        renderer.domElement.style.cursor = "grabbing";
+        return;
+      }
+      const hit = hitFromEvent(event);
+      renderer.domElement.style.cursor = hit?.uv && hotspotFromUv(hit.uv) ? "pointer" : "grab";
+    };
+    renderer.domElement.addEventListener("pointermove", onPointerMove);
+
+    const onPointerDown = (event: PointerEvent) => {
+      updatePointer(event);
+      const hit = hitFromEvent(event);
+      if (!hit?.uv) return;
+      renderer.domElement.setPointerCapture(event.pointerId);
+      dragStart = { x: event.clientX, y: event.clientY };
+      dragMoved = false;
+      draggedIndex = particleIndexFromUv(hit.uv);
+      mesh.worldToLocal(dragTarget.copy(hit.point));
+      renderer.domElement.style.cursor = "grabbing";
     };
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
+
+    const onPointerUp = (event: PointerEvent) => {
+      const hit = hitFromEvent(event);
+      if (!dragMoved && hit?.uv) {
+        const hotspot = hotspotFromUv(hit.uv);
+        if (hotspot?.action.type === "openUrl") {
+          window.open(hotspot.action.url, "_blank", "noopener,noreferrer");
+        }
+      }
+      if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+        renderer.domElement.releasePointerCapture(event.pointerId);
+      }
+      draggedIndex = null;
+      dragStart = null;
+      dragMoved = false;
+      renderer.domElement.style.cursor = "grab";
+    };
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
+    renderer.domElement.addEventListener("pointercancel", onPointerUp);
+    renderer.domElement.style.cursor = "grab";
 
     const animate = () => {
       frame = requestAnimationFrame(animate);
       const t = performance.now() * 0.001;
-      const positions = geometry.attributes.position.array as Float32Array;
-      for (let index = 0; index < positions.length; index += 3) {
-        const x = base[index];
-        const y = base[index + 1];
-        positions[index] = x + pointerX * 0.08 * Math.cos(y + t);
-        positions[index + 1] = y - pointerY * 0.08 * Math.sin(x + t);
-        positions[index + 2] =
-          Math.sin(x * 2.8 + t) * 0.045 + Math.cos(y * 3.6 + t * 0.8) * 0.035;
-      }
-      geometry.attributes.position.needsUpdate = true;
+      stepCloth(particles, constraints, draggedIndex, dragTarget, pointerX, pointerY, t);
+      writeClothToGeometry(geometry, particles);
       mesh.rotation.x = -0.08 + pointerY * 0.08;
       mesh.rotation.y = pointerX * 0.14;
       renderer.render(scene, camera);
@@ -95,6 +176,8 @@ export function FabricSurface({
       cancelAnimationFrame(frame);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointerup", onPointerUp);
+      renderer.domElement.removeEventListener("pointercancel", onPointerUp);
       geometry.dispose();
       material.dispose();
       texture.dispose();
@@ -108,6 +191,154 @@ export function FabricSurface({
       <div className="empty-widget" />
     </div>
   );
+}
+
+function createClothParticles(
+  geometry: THREE.PlaneGeometry,
+  segmentsX: number,
+  segmentsY: number,
+): ClothParticle[] {
+  const positions = geometry.attributes.position.array as Float32Array;
+  const particles: ClothParticle[] = [];
+  for (let index = 0; index < positions.length; index += 3) {
+    const vertex = index / 3;
+    const row = Math.floor(vertex / (segmentsX + 1));
+    const col = vertex % (segmentsX + 1);
+    const x = positions[index];
+    const y = positions[index + 1];
+    const z = positions[index + 2];
+    particles.push({
+      x,
+      y,
+      z,
+      oldX: x,
+      oldY: y,
+      oldZ: z,
+      baseX: x,
+      baseY: y,
+      baseZ: z,
+      pinned:
+        (row === 0 || row === segmentsY) &&
+        (col === 0 || col === segmentsX),
+    });
+  }
+  return particles;
+}
+
+function createClothConstraints(
+  particles: ClothParticle[],
+  segmentsX: number,
+  segmentsY: number,
+): ClothConstraint[] {
+  const constraints: ClothConstraint[] = [];
+  const indexAt = (row: number, col: number) => row * (segmentsX + 1) + col;
+  for (let row = 0; row <= segmentsY; row += 1) {
+    for (let col = 0; col <= segmentsX; col += 1) {
+      if (col < segmentsX) addConstraint(indexAt(row, col), indexAt(row, col + 1));
+      if (row < segmentsY) addConstraint(indexAt(row, col), indexAt(row + 1, col));
+      if (col < segmentsX && row < segmentsY) {
+        addConstraint(indexAt(row, col), indexAt(row + 1, col + 1));
+      }
+    }
+  }
+  return constraints;
+
+  function addConstraint(a: number, b: number) {
+    const first = particles[a];
+    const second = particles[b];
+    constraints.push({
+      a,
+      b,
+      rest: Math.hypot(first.baseX - second.baseX, first.baseY - second.baseY, first.baseZ - second.baseZ),
+    });
+  }
+}
+
+function stepCloth(
+  particles: ClothParticle[],
+  constraints: ClothConstraint[],
+  draggedIndex: number | null,
+  dragTarget: THREE.Vector3,
+  pointerX: number,
+  pointerY: number,
+  time: number,
+) {
+  for (let index = 0; index < particles.length; index += 1) {
+    const point = particles[index];
+    if (point.pinned || index === draggedIndex) continue;
+
+    const vx = (point.x - point.oldX) * 0.985;
+    const vy = (point.y - point.oldY) * 0.985;
+    const vz = (point.z - point.oldZ) * 0.975;
+    point.oldX = point.x;
+    point.oldY = point.y;
+    point.oldZ = point.z;
+
+    const breeze =
+      Math.sin(point.baseX * 2.6 + time * 1.4) *
+      Math.cos(point.baseY * 3.2 + time * 0.9) *
+      0.0018;
+    point.x += vx + (point.baseX - point.x) * 0.018 + pointerX * 0.0012;
+    point.y += vy + (point.baseY - point.y) * 0.018 - pointerY * 0.0012;
+    point.z += vz + breeze + (point.baseZ - point.z) * 0.034;
+  }
+
+  if (draggedIndex !== null) {
+    const point = particles[draggedIndex];
+    point.x += (dragTarget.x - point.x) * 0.65;
+    point.y += (dragTarget.y - point.y) * 0.65;
+    point.z += (0.32 - point.z) * 0.55;
+    point.oldX = point.x;
+    point.oldY = point.y;
+    point.oldZ = point.z;
+  }
+
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    for (const constraint of constraints) {
+      satisfyConstraint(particles, constraint, draggedIndex);
+    }
+  }
+}
+
+function satisfyConstraint(
+  particles: ClothParticle[],
+  constraint: ClothConstraint,
+  draggedIndex: number | null,
+) {
+  const first = particles[constraint.a];
+  const second = particles[constraint.b];
+  const dx = second.x - first.x;
+  const dy = second.y - first.y;
+  const dz = second.z - first.z;
+  const distance = Math.hypot(dx, dy, dz) || 1;
+  const offset = (distance - constraint.rest) / distance;
+  const firstLocked = first.pinned || constraint.a === draggedIndex;
+  const secondLocked = second.pinned || constraint.b === draggedIndex;
+  const firstShare = firstLocked ? 0 : secondLocked ? 1 : 0.5;
+  const secondShare = secondLocked ? 0 : firstLocked ? 1 : 0.5;
+
+  first.x += dx * offset * firstShare;
+  first.y += dy * offset * firstShare;
+  first.z += dz * offset * firstShare;
+  second.x -= dx * offset * secondShare;
+  second.y -= dy * offset * secondShare;
+  second.z -= dz * offset * secondShare;
+}
+
+function writeClothToGeometry(geometry: THREE.PlaneGeometry, particles: ClothParticle[]) {
+  const positions = geometry.attributes.position.array as Float32Array;
+  for (let index = 0; index < particles.length; index += 1) {
+    const point = particles[index];
+    const offset = index * 3;
+    positions[offset] = point.x;
+    positions[offset + 1] = point.y;
+    positions[offset + 2] = point.z;
+  }
+  geometry.attributes.position.needsUpdate = true;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function drawScene(canvas: HTMLCanvasElement, scene: SignalScene) {

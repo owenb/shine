@@ -8,9 +8,15 @@ import {
   type ReactNode,
 } from "react";
 import { A2UIProvider, A2UIRenderer, useA2UI } from "@copilotkit/a2ui-renderer";
-import { CopilotKit } from "@copilotkit/react-core/v2";
+import {
+  CopilotKit,
+  UseAgentUpdate,
+  useAgent,
+  useAgentContext,
+  useCopilotKit,
+} from "@copilotkit/react-core/v2";
 import { signalCatalog } from "./a2ui-catalog";
-import { worlds, type WorldId, type WorldState } from "@sig/core";
+import { isWorldId, worlds, type WorldId, type WorldState } from "@sig/core";
 import { FabricSurface } from "./FabricSurface";
 import { VoiceSurface } from "./VoiceSurface";
 import { ShineBackground } from "./ShineBackground";
@@ -22,6 +28,19 @@ const worldLabels: Record<WorldId, string> = {
 };
 
 export function App() {
+  return (
+    <CopilotKit
+      runtimeUrl="/api/copilotkit"
+      useSingleEndpoint={false}
+      showDevConsole={false}
+      enableInspector={false}
+    >
+      <SignalApp />
+    </CopilotKit>
+  );
+}
+
+function SignalApp() {
   const [world, setWorld] = useState<WorldId>("world-a");
   const [state, setState] = useState<WorldState | null>(null);
   const [atTx, setAtTx] = useState<number | null>(null);
@@ -29,60 +48,59 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [componentStyle, setComponentStyle] = useState<CSSProperties | null>(null);
-  const cacheRef = useRef<Map<string, WorldState>>(new Map());
-  const remember = useCallback((next: WorldState) => {
-    cacheRef.current.set(cacheKey(next.world, next.selectedTx), next);
+  const stateCache = useRef(new Map<string, WorldState>());
+  const inflightState = useRef(new Map<string, Promise<WorldState>>());
+  const { copilotkit } = useCopilotKit();
+  const { agent } = useAgent({
+    agentId: "builder",
+    updates: [UseAgentUpdate.OnStateChanged, UseAgentUpdate.OnRunStatusChanged],
+  });
+  const agentContext = useMemo(
+    () => ({
+      world,
+      selectedTx: state?.selectedTx ?? null,
+      headTx: state?.headTx ?? null,
+    }),
+    [world, state?.selectedTx, state?.headTx],
+  );
+
+  useAgentContext({
+    description: "signal-ui-context",
+    value: agentContext,
+  });
+
+  const cacheWorldState = useCallback((next: WorldState) => {
+    stateCache.current.set(stateCacheKey(next.world, next.selectedTx), next);
+    if (next.selectedTx === next.headTx) {
+      stateCache.current.set(stateCacheKey(next.world, null), next);
+    }
   }, []);
 
-  // Resolve the surface for the current world + tx. History is immutable, so we
-  // serve scrubs straight from cache (zero network → the thumb and the surface
-  // move as one). Only a cache miss or going Live touches the server.
   useEffect(() => {
-    if (atTx !== null) {
-      const cached = cacheRef.current.get(cacheKey(world, atTx));
-      if (cached) {
-        setState(cached);
-        return;
-      }
-    }
-    const controller = new AbortController();
-    void loadState(world, atTx, controller.signal)
-      .then((next) => {
-        remember(next);
-        setState(next);
-      })
-      .catch(() => {});
-    return () => controller.abort();
-  }, [world, atTx, remember]);
+    let cancelled = false;
+    void loadStateCached(world, atTx, stateCache.current, inflightState.current).then((next) => {
+      if (cancelled) return;
+      cacheWorldState(next);
+      setState(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [world, atTx, cacheWorldState]);
 
-  // Live updates only while pinned to head — scrubbing the past is never yanked
-  // forward by a new commit.
   useEffect(() => {
     if (atTx !== null) return;
     const events = new EventSource(`/api/events?world=${world}`);
     events.addEventListener("state", (event) => {
       const next = JSON.parse((event as MessageEvent).data) as WorldState;
-      remember(next);
+      cacheWorldState(next);
       setState(next);
     });
     return () => events.close();
-  }, [world, atTx, remember]);
-
-  // Warm the cache for every point in the timeline so the first scrub is already
-  // instant. Keyed on headTx (a stable proxy for "the timeline grew") so it does
-  // not re-scan on every live tick's fresh array reference.
-  useEffect(() => {
-    const controller = new AbortController();
-    for (const item of state?.timeline ?? []) {
-      if (cacheRef.current.has(cacheKey(world, item.tx))) continue;
-      void loadState(world, item.tx, controller.signal)
-        .then((next) => remember(next))
-        .catch(() => {});
-    }
-    return () => controller.abort();
-  }, [world, state?.headTx, remember]);
+  }, [world, atTx, cacheWorldState]);
 
   const timeline = state?.timeline ?? [];
+  const timelineKey = useMemo(() => timeline.map((item) => item.tx).join(","), [timeline]);
   const selectedIndex = useMemo(() => {
     if (!timeline.length || !state) return 0;
     return Math.max(
@@ -91,6 +109,14 @@ export function App() {
     );
   }, [state, timeline]);
   const live = state ? state.selectedTx === state.headTx : true;
+
+  useEffect(() => {
+    for (const item of timeline) {
+      void loadStateCached(world, item.tx, stateCache.current, inflightState.current)
+        .then(cacheWorldState)
+        .catch(() => undefined);
+    }
+  }, [world, timelineKey, cacheWorldState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,18 +163,18 @@ export function App() {
     setError(null);
     setPrompt("");
     try {
-      const response = await fetch("/api/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ world, prompt: trimmed }),
+      agent.addMessage({
+        id: crypto.randomUUID(),
+        role: "user",
+        content: trimmed,
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { details?: string; error?: string } | null;
-        throw new Error(body?.details ?? body?.error ?? `Request failed with ${response.status}`);
+      await copilotkit.runAgent({ agent });
+      if (!isWorldState(agent.state)) {
+        throw new Error("CopilotKit builder did not return a Signal UI state snapshot");
       }
-      const next = (await response.json()) as WorldState;
+      cacheWorldState(agent.state);
       setAtTx(null);
-      setState(next);
+      setState(agent.state);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : String(submitError));
     } finally {
@@ -159,22 +185,15 @@ export function App() {
   function scrub(index: number) {
     const item = timeline[index];
     if (!item || !state) return;
-    const nextTx = item.tx === state.headTx ? null : item.tx;
-    setAtTx(nextTx);
-    // Pull the state synchronously from cache so the surface updates on the same
-    // frame as the thumb — no waiting on a fetch.
-    const cached = cacheRef.current.get(cacheKey(world, nextTx ?? state.headTx));
+    if (item.tx === state.selectedTx) return;
+    const nextAtTx = item.tx === state.headTx ? null : item.tx;
+    const cached = stateCache.current.get(stateCacheKey(world, nextAtTx ?? item.tx));
     if (cached) setState(cached);
+    setAtTx(nextAtTx);
   }
 
   return (
-    <CopilotKit
-      runtimeUrl="/api/copilotkit"
-      useSingleEndpoint={false}
-      showDevConsole={false}
-      enableInspector={false}
-    >
-      <A2UIProvider catalog={signalCatalog}>
+    <A2UIProvider catalog={signalCatalog}>
       <ShineBackground />
       <main
         className="app-shell"
@@ -245,8 +264,7 @@ export function App() {
           />
         </section>
       </main>
-      </A2UIProvider>
-    </CopilotKit>
+    </A2UIProvider>
   );
 }
 
@@ -307,12 +325,46 @@ function DomSurface({ state }: { state: ReadyWorldState }) {
   );
 }
 
-function cacheKey(world: WorldId, tx: number) {
-  return `${world}:${tx}`;
-}
-
-async function loadState(world: WorldId, atTx: number | null, signal?: AbortSignal) {
+async function loadState(world: WorldId, atTx: number | null) {
   const params = new URLSearchParams({ world });
   if (atTx !== null) params.set("atTx", String(atTx));
-  return fetch(`/api/state?${params}`, { signal }).then((res) => res.json() as Promise<WorldState>);
+  return fetch(`/api/state?${params}`).then((res) => res.json() as Promise<WorldState>);
+}
+
+async function loadStateCached(
+  world: WorldId,
+  atTx: number | null,
+  cache: Map<string, WorldState>,
+  inflight: Map<string, Promise<WorldState>>,
+) {
+  const key = stateCacheKey(world, atTx);
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  const pending = inflight.get(key);
+  if (pending) return pending;
+
+  const request = loadState(world, atTx)
+    .then((next) => {
+      cache.set(stateCacheKey(next.world, next.selectedTx), next);
+      if (next.selectedTx === next.headTx) {
+        cache.set(stateCacheKey(next.world, null), next);
+      }
+      return next;
+    })
+    .finally(() => {
+      inflight.delete(key);
+    });
+  inflight.set(key, request);
+  return request;
+}
+
+function stateCacheKey(world: WorldId, atTx: number | null) {
+  return `${world}:${atTx ?? "live"}`;
+}
+
+function isWorldState(value: unknown): value is WorldState {
+  if (!value || typeof value !== "object") return false;
+  const maybe = value as Partial<WorldState>;
+  return typeof maybe.world === "string" && isWorldId(maybe.world) && typeof maybe.headTx === "number";
 }

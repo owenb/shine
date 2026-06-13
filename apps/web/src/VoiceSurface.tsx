@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { SignalSurface } from "@sig/core";
 
 export function VoiceSurface({
@@ -8,8 +8,11 @@ export function VoiceSurface({
   surface: SignalSurface;
   children: ReactNode;
 }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
   useEffect(() => {
-    if (!("speechSynthesis" in window)) return;
+    const controller = new AbortController();
+    let audioUrl: string | null = null;
     const summary = [
       surface.data.title,
       surface.data.subtitle,
@@ -19,12 +22,42 @@ export function VoiceSurface({
     ]
       .filter(Boolean)
       .join(". ");
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(summary);
-    utterance.rate = 0.94;
-    utterance.pitch = 1;
-    window.speechSynthesis.speak(utterance);
-    return () => window.speechSynthesis.cancel();
+    const text = `[calm, precise, quietly confident] ${summary}`;
+
+    void fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice: "Kore" }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as
+            | { details?: string; error?: string }
+            | null;
+          throw new Error(body?.details ?? body?.error ?? `TTS failed with ${response.status}`);
+        }
+        return response.blob();
+      })
+      .then(async (blob) => {
+        audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        audioRef.current?.pause();
+        audioRef.current = audio;
+        await audio.play();
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          console.error("[voice] Gemini TTS failed", error);
+        }
+      });
+
+    return () => {
+      controller.abort();
+      audioRef.current?.pause();
+      audioRef.current = null;
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+    };
   }, [surface.surfaceId, surface.data.title, surface.data.subtitle, surface.data.stat]);
 
   return (
