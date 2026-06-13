@@ -31,7 +31,6 @@ import {
   composeScene,
   defaultPreferences,
   isWorldId,
-  signalFromPrompt,
   worlds,
   type Grounding,
   type CommandInput,
@@ -93,6 +92,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS facts_world_tx ON facts(world, tx);
   CREATE INDEX IF NOT EXISTS txs_world_id ON txs(world, id);
 `);
+ensureColumn("effects", "world", "TEXT");
+ensureColumn("effects", "tx", "INTEGER");
+ensureColumn("effects", "reused_tx", "INTEGER");
+db.exec("CREATE INDEX IF NOT EXISTS effects_world_tx ON effects(world, tx);");
 
 type FactValue = string | number | boolean | object | null;
 
@@ -106,6 +109,12 @@ type ServerRedis = {
 type MemoryContext = {
   provider: "iris" | "redis-hash";
   memories: string[];
+  effects: EffectUse[];
+};
+
+type EffectUse = {
+  key: string;
+  reused: boolean;
 };
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -181,6 +190,9 @@ app.get("/api/health", (c) =>
       ttsModel: geminiTtsModel,
       vertexai: geminiVertexai,
     },
+    linkup: {
+      configured: Boolean(linkup),
+    },
     catalogId: CATALOG_ID,
     surfaceId: SURFACE_ID,
   }),
@@ -205,7 +217,8 @@ app.get("/api/tx/:tx", (c) => {
 
 app.get("/api/flight", (c) => {
   const world = parseWorld(c.req.query("world"));
-  return c.json(getFlightRecorder(world));
+  const atTx = parseOptionalInt(c.req.query("atTx"));
+  return c.json(getFlightRecorder(world, atTx));
 });
 
 app.post("/api/command", async (c) => {
@@ -214,8 +227,18 @@ app.post("/api/command", async (c) => {
   if (!parsed.success) {
     return c.json({ error: "Invalid command", details: parsed.error.flatten() }, 400);
   }
-  const receipt = await applyCommand(parsed.data);
-  return c.json(getWorldState(parsed.data.world, receipt.tx));
+  try {
+    const receipt = await applyAgentCommand(parsed.data);
+    return c.json(getWorldState(parsed.data.world, receipt.tx));
+  } catch (error) {
+    return c.json(
+      {
+        error: "Signal agent failed",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      502,
+    );
+  }
 });
 
 app.post("/api/agent", async (c) => {
@@ -230,7 +253,7 @@ app.post("/api/agent", async (c) => {
   } catch (error) {
     return c.json(
       {
-        error: "Gemini signal generation failed",
+        error: "Signal agent failed",
         details: error instanceof Error ? error.message : String(error),
       },
       502,
@@ -283,14 +306,24 @@ app.post("/api/reset", async (c) => {
 
 app.get("/api/events", (c) => {
   const world = parseWorld(c.req.query("world"));
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
   const stream = new ReadableStream({
     start(controller) {
       if (!sseClients.has(world)) sseClients.set(world, new Set());
       sseClients.get(world)!.add(controller);
       writeSse(controller, "state", getWorldState(world));
+      heartbeat = setInterval(() => {
+        try {
+          writeSse(controller, "heartbeat", { at: new Date().toISOString() });
+        } catch {
+          sseClients.get(world)?.delete(controller);
+          if (heartbeat) clearInterval(heartbeat);
+        }
+      }, 15_000);
     },
     cancel(controller) {
       sseClients.get(world)?.delete(controller);
+      if (heartbeat) clearInterval(heartbeat);
     },
   });
   return new Response(stream, {
@@ -361,36 +394,32 @@ function seedIfEmpty() {
   }
 }
 
-async function applyCommand(input: CommandInput): Promise<Receipt> {
-  return applySignalCommand({
-    input,
-    signal: signalFromPrompt(input.prompt),
-    agent: {
-      provider: "heuristic",
-      model: "local-signal",
-      reused: false,
-      grounded: false,
-    },
-  });
-}
-
 async function applyAgentCommand(input: CommandInput): Promise<Receipt> {
   const memoryContext = await retrieveMemoryContext(input.world, input.prompt);
-  const signalResult = await resolveSignal(input.prompt, memoryContext);
-  const grounding =
-    signalResult.signal.type === "renderWidget" && signalResult.signal.intent === "competitors"
-      ? await resolveGrounding(input.prompt)
+  const signalResult = await resolveSignal(input.world, input.prompt, memoryContext);
+  let signal = signalResult.signal;
+  const groundingResult =
+    signal.type === "renderWidget" && shouldGroundPrompt(input.prompt, signal.intent)
+      ? await resolveGrounding(input.world, input.prompt)
       : undefined;
+  if (signal.type === "renderWidget" && groundingResult && signal.intent !== "competitors") {
+    signal = { ...signal, intent: "research" };
+  }
   return applySignalCommand({
     input,
-    signal: signalResult.signal,
-    grounding,
+    signal,
+    grounding: groundingResult?.grounding,
     memoryContext,
+    effects: [
+      ...(memoryContext?.effects ?? []),
+      { key: signalResult.effect.key, reused: signalResult.effect.reused },
+      ...(groundingResult ? [{ key: groundingResult.effect.key, reused: groundingResult.effect.reused }] : []),
+    ],
     agent: {
       provider: signalResult.provider,
       model: signalResult.model,
       reused: signalResult.reused,
-      grounded: Boolean(grounding),
+      grounded: Boolean(groundingResult?.grounding),
       memory: memoryContext
         ? { provider: memoryContext.provider, count: memoryContext.memories.length }
         : undefined,
@@ -445,17 +474,20 @@ async function applySignalCommand({
   signal,
   grounding,
   memoryContext,
+  effects,
   agent,
 }: {
   input: CommandInput;
   signal: SignalPacket;
   grounding?: Grounding;
   memoryContext?: MemoryContext;
+  effects?: EffectUse[];
   agent: NonNullable<WorldState["agent"]>;
 }): Promise<Receipt> {
   const current = getWorldState(input.world);
   const nextPrefs = { ...current.preferences };
   const tx = insertTx(input.world, summarize(input.prompt));
+  await annotateEffectUses(effects ?? [], input.world, tx);
   const preferenceChanges: Array<{
     key: keyof WorldPreferences;
     value: string;
@@ -473,21 +505,21 @@ async function applySignalCommand({
   for (const change of preferenceChanges) {
     if (change.key === "presentation" && isPresentation(change.value)) {
       nextPrefs.presentation = change.value;
-      await remember(input.world, change.key, change.value);
+      await remember(input.world, tx, change.key, change.value);
     }
     if (change.key === "tone" && isTone(change.value)) {
       nextPrefs.tone = change.value;
-      await remember(input.world, change.key, change.value);
+      await remember(input.world, tx, change.key, change.value);
     }
     if (change.key === "renderer" && isRenderer(change.value)) {
       nextPrefs.renderer = change.value;
-      await remember(input.world, change.key, change.value);
+      await remember(input.world, tx, change.key, change.value);
     }
     if (change.key === "component" && isComponent(change.value)) {
       nextPrefs.component = change.value;
       const hash = insertComponentBlob(change.value);
       insertFact(tx, input.world, "world", "codePin", hash);
-      await remember(input.world, change.key, change.value);
+      await remember(input.world, tx, change.key, change.value);
     }
   }
 
@@ -498,17 +530,35 @@ async function applySignalCommand({
   const surface = composeSurface(input.world, nextPrefs, signal, tx, grounding);
   insertFact(tx, input.world, "surface", "current", surface);
   insertFact(tx, input.world, "agent", "last", agent);
+  const curatorReceipt = insertReceipt(
+    tx,
+    input.world,
+    true,
+    preferenceChanges.length ? "CURATOR_LEARNED" : memoryContext ? "CURATOR_RECALLED" : "CURATOR_READY",
+    preferenceChanges.length
+      ? `Curator learned ${preferenceChanges.map((change) => `${change.key}=${change.value}`).join(", ")}; Builder re-rendered.`
+      : memoryContext
+        ? `Curator recalled ${memoryContext.memories.length} ${memoryContext.provider} memories.`
+        : "Curator accepted the Gemini signal.",
+  );
   const receipt = insertReceipt(
     tx,
     input.world,
     true,
-    preferenceChanges.length ? "MEMORY_LEARNED" : "SURFACE_RENDERED",
-    preferenceChanges.length
-      ? `Curator learned ${preferenceChanges.map((change) => `${change.key}=${change.value}`).join(", ")}; Builder re-rendered.`
-      : memoryContext
-        ? `Builder used ${memoryContext.provider} memory and compiled through Loom into A2UI.`
-        : "Signal compiled through Loom into A2UI.",
+    "BUILDER_RENDERED",
+    agent.grounded
+      ? "Builder rendered a LinkUp-grounded A2UI surface."
+      : "Builder compiled the Gemini signal through Loom into A2UI.",
   );
+  const state = getWorldState(input.world, tx);
+  await writeRedisStream("receipt", {
+    world: input.world,
+    tx,
+    code: curatorReceipt.code,
+    provider: agent.provider,
+    reused: agent.reused,
+    grounded: agent.grounded,
+  });
   await writeRedisStream("receipt", {
     world: input.world,
     tx,
@@ -517,7 +567,7 @@ async function applySignalCommand({
     reused: agent.reused,
     grounded: agent.grounded,
   });
-  broadcast(input.world, getWorldState(input.world, tx));
+  broadcast(input.world, state);
   return receipt;
 }
 
@@ -591,6 +641,9 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
       memory: redis.memory.get(world) ?? {},
       agentMemory: agentMemoryStatus,
     },
+    linkup: {
+      configured: Boolean(linkup),
+    },
   };
 }
 
@@ -637,39 +690,54 @@ function getTxDetail(tx: number) {
   return { tx: txRow ?? { tx }, facts, receipts };
 }
 
-function getFlightRecorder(world: WorldId) {
+function getFlightRecorder(world: WorldId, atTx?: number) {
+  const headTx = getHeadTx(world);
+  const selectedTx = atTx ?? headTx;
   const receipts = db
     .prepare(
       `SELECT receipts.tx, receipts.accepted, receipts.code, receipts.message, receipts.created_at AS at, txs.summary
        FROM receipts
        JOIN txs ON txs.id = receipts.tx
-       WHERE receipts.world = ?
+       WHERE receipts.world = ? AND receipts.tx <= ?
        ORDER BY receipts.tx DESC
        LIMIT 12`,
     )
-    .all(world)
+    .all(world, selectedTx)
     .map((row) => ({
       ...(row as { accepted: number }),
       accepted: Boolean((row as { accepted: number }).accepted),
     }));
   const effects = db
     .prepare(
-      "SELECT kind, input, output, reused, created_at AS at FROM effects ORDER BY created_at DESC LIMIT 12",
+      `SELECT world, tx, kind, input, output, reused, reused_tx, created_at AS at
+       FROM effects
+       WHERE world = ? AND tx IS NOT NULL AND tx <= ?
+       ORDER BY tx DESC, created_at DESC
+       LIMIT 12`,
     )
-    .all()
+    .all(world, selectedTx)
     .map((row) => ({
+      world: (row as { world: string }).world,
+      tx: (row as { tx: number }).tx,
       kind: (row as { kind: string }).kind,
       input: JSON.parse((row as { input: string }).input),
       output: JSON.parse((row as { output: string }).output),
-      reused: Boolean((row as { reused: number }).reused),
+      reused: Boolean((row as { reused: number; reused_tx: number | null }).reused) &&
+        ((row as { reused_tx: number | null }).reused_tx === null ||
+          Number((row as { reused_tx: number | null }).reused_tx) <= selectedTx),
       at: (row as { at: string }).at,
     }));
   return {
     world,
+    headTx,
+    selectedTx,
     redis: {
       connected: redis.connected,
       memory: redis.memory.get(world) ?? {},
       agentMemory: agentMemoryStatus,
+    },
+    linkup: {
+      configured: Boolean(linkup),
     },
     receipts,
     effects,
@@ -681,6 +749,12 @@ function getHeadTx(world: WorldId): number {
     .prepare("SELECT COALESCE(MAX(id), 0) AS tx FROM txs WHERE world = ?")
     .get(world) as { tx: number };
   return row.tx;
+}
+
+function ensureColumn(table: "effects", column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((item) => item.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function insertTx(world: WorldId, summary: string): number {
@@ -734,17 +808,19 @@ function insertComponentBlob(variant: WorldPreferences["component"]) {
   return hash;
 }
 
-async function resolveSignal(prompt: string, memoryContext?: MemoryContext): Promise<{
+async function resolveSignal(world: WorldId, prompt: string, memoryContext?: MemoryContext): Promise<{
   signal: SignalPacket;
   provider: "gemini";
   model: string;
   reused: boolean;
+  effect: EffectUse;
 }> {
   if (!gemini) {
     throw new Error("GEMINI_API_KEY is not configured");
   }
 
   const signalCacheInput = {
+    world,
     prompt,
     memory: memoryContext?.memories ?? [],
     model: geminiModel,
@@ -758,6 +834,7 @@ async function resolveSignal(prompt: string, memoryContext?: MemoryContext): Pro
       provider: "gemini",
       model: geminiModel,
       reused: true,
+      effect: { key: cached.key, reused: cached.reused },
     };
   }
 
@@ -771,7 +848,7 @@ async function resolveSignal(prompt: string, memoryContext?: MemoryContext): Pro
             {
               text:
                 "Classify this request for Signal UI. Return JSON only. " +
-                "Allowed render intents: revenue, competitors, pipeline, summary. " +
+                "Allowed render intents: revenue, competitors, research, pipeline, summary. " +
                 "Allowed preferences: presentation=visual|table|brief, tone=calm|sharp, renderer=dom|fabric|voice, component=crystal|ledger|brief. " +
                 (memoryContext?.memories.length
                   ? `Durable user memory: ${memoryContext.memories.join("; ")}. `
@@ -787,7 +864,7 @@ async function resolveSignal(prompt: string, memoryContext?: MemoryContext): Pro
           type: "object",
           properties: {
             type: { type: "string", enum: ["renderWidget", "setPreference"] },
-            intent: { type: "string", enum: ["revenue", "competitors", "pipeline", "summary"] },
+            intent: { type: "string", enum: ["revenue", "competitors", "research", "pipeline", "summary"] },
             key: {
               type: "string",
               enum: ["presentation", "tone", "renderer", "component"],
@@ -801,28 +878,33 @@ async function resolveSignal(prompt: string, memoryContext?: MemoryContext): Pro
     const text = response.text ?? "{}";
     const parsed = JSON.parse(text) as Partial<SignalPacket>;
     const signal = normalizeGeminiSignal(parsed, prompt);
-    await cacheEffect("gemini-signal", signalCacheInput, { signal }, false);
-    return { signal, provider: "gemini", model: geminiModel, reused: false };
+    const effect = await cacheEffect("gemini-signal", signalCacheInput, { signal }, false, { world });
+    return { signal, provider: "gemini", model: geminiModel, reused: false, effect };
   } catch (error) {
     await cacheEffect(
       "gemini-signal-error",
       signalCacheInput,
       { message: error instanceof Error ? error.message : String(error) },
       false,
+      { world },
     );
     throw error;
   }
 }
 
-async function resolveGrounding(prompt: string): Promise<Grounding> {
-  const input = { prompt };
-  const cached = await getCachedEffect<Grounding>("linkup-grounding", input);
-  if (cached) return { ...cached.output, reused: true };
+async function resolveGrounding(
+  world: WorldId,
+  prompt: string,
+): Promise<{ grounding: Grounding; effect: EffectUse } | undefined> {
+  if (!linkup) return undefined;
 
-  if (!linkup) {
-    const fallback: Grounding = fallbackGrounding();
-    await cacheEffect("linkup-grounding", input, fallback, false);
-    return fallback;
+  const input = { world, prompt };
+  const cached = await getCachedEffect<Grounding>("linkup-grounding", input);
+  if (cached) {
+    return {
+      grounding: { ...cached.output, reused: true },
+      effect: { key: cached.key, reused: cached.reused },
+    };
   }
 
   try {
@@ -842,29 +924,18 @@ async function resolveGrounding(prompt: string): Promise<Grounding> {
         snippet: source.snippet,
       })),
     };
-    await cacheEffect("linkup-grounding", input, grounding, false);
-    return grounding;
+    const effect = await cacheEffect("linkup-grounding", input, grounding, false, { world });
+    return { grounding, effect };
   } catch (error) {
-    const fallback: Grounding = {
-      ...fallbackGrounding(),
-      answer: `LinkUp fallback: ${error instanceof Error ? error.message : "grounding unavailable"}`,
-    };
-    await cacheEffect("linkup-grounding", input, fallback, false);
-    return fallback;
+    await cacheEffect(
+      "linkup-grounding-error",
+      input,
+      { message: error instanceof Error ? error.message : String(error) },
+      false,
+      { world },
+    );
+    throw error;
   }
-}
-
-function fallbackGrounding(): Grounding {
-  return {
-    provider: "fallback",
-    reused: false,
-    answer: "Grounded snapshot from cached demo sources. Add LINKUP_API_KEY for live citations.",
-    sources: [
-      { title: "Adyen", label: "adyen.com", url: "https://www.adyen.com" },
-      { title: "Checkout.com", label: "checkout.com", url: "https://www.checkout.com" },
-      { title: "Paddle", label: "paddle.com", url: "https://www.paddle.com" },
-    ],
-  };
 }
 
 async function synthesizeVoice(text: string, voiceName: string): Promise<Buffer> {
@@ -963,7 +1034,7 @@ async function getCachedEffect<T>(kind: string, input: object) {
     const cached = await redis.client.get(`signal:effect:${key}`);
     if (cached) {
       await markEffectReused(kind, key);
-      return { key, output: JSON.parse(cached) as T };
+      return { key, output: JSON.parse(cached) as T, reused: true };
     }
   }
   const row = db.prepare("SELECT output FROM effects WHERE key = ?").get(key) as
@@ -971,28 +1042,67 @@ async function getCachedEffect<T>(kind: string, input: object) {
     | undefined;
   if (!row) return null;
   await markEffectReused(kind, key);
-  return { key, output: JSON.parse(row.output) as T };
+  return { key, output: JSON.parse(row.output) as T, reused: true };
 }
 
-async function cacheEffect(kind: string, input: object, output: unknown, reused: boolean) {
+async function cacheEffect(
+  kind: string,
+  input: object,
+  output: unknown,
+  reused: boolean,
+  meta: { world?: WorldId; tx?: number } = {},
+): Promise<EffectUse> {
   const key = effectKey(kind, input);
   const encodedOutput = JSON.stringify(output);
   db.prepare(
-    "INSERT OR REPLACE INTO effects (key, kind, input, output, reused, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(key, kind, JSON.stringify(input), encodedOutput, reused ? 1 : 0, new Date().toISOString());
+    `INSERT INTO effects (key, kind, input, output, reused, created_at, world, tx, reused_tx)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       kind = excluded.kind,
+       input = excluded.input,
+       output = excluded.output,
+       reused = CASE WHEN effects.reused = 1 OR excluded.reused = 1 THEN 1 ELSE 0 END,
+       world = COALESCE(excluded.world, effects.world),
+       tx = COALESCE(effects.tx, excluded.tx),
+       reused_tx = COALESCE(effects.reused_tx, excluded.reused_tx)`,
+  ).run(
+    key,
+    kind,
+    JSON.stringify(input),
+    encodedOutput,
+    reused ? 1 : 0,
+    new Date().toISOString(),
+    meta.world ?? null,
+    meta.tx ?? null,
+    reused && meta.tx ? meta.tx : null,
+  );
   if (redis.client && redis.connected) {
     await redis.client.set(`signal:effect:${key}`, encodedOutput);
   }
   await writeRedisStream("effect", { kind, key, reused });
-  return key;
+  return { key, reused };
 }
 
 async function markEffectReused(kind: string, key: string) {
-  db.prepare("UPDATE effects SET reused = 1, created_at = ? WHERE key = ?").run(
-    new Date().toISOString(),
-    key,
-  );
+  db.prepare("UPDATE effects SET reused = 1 WHERE key = ?").run(key);
   await writeRedisStream("effect", { kind, key, reused: true });
+}
+
+async function annotateEffectUses(effects: EffectUse[], world: WorldId, tx: number) {
+  if (!effects.length) return;
+  const statement = db.prepare(
+    `UPDATE effects
+     SET world = COALESCE(world, ?),
+         tx = COALESCE(tx, ?),
+         reused_tx = CASE
+           WHEN ? = 1 THEN COALESCE(reused_tx, ?)
+           ELSE reused_tx
+         END
+     WHERE key = ?`,
+  );
+  for (const effect of effects) {
+    statement.run(world, tx, effect.reused ? 1 : 0, tx, effect.key);
+  }
 }
 
 function effectKey(kind: string, input: object) {
@@ -1007,7 +1117,7 @@ function hostname(url: string) {
   }
 }
 
-async function remember(world: WorldId, key: string, value: string) {
+async function remember(world: WorldId, tx: number, key: string, value: string) {
   const memory = { ...(redis.memory.get(world) ?? {}), [key]: value };
   redis.memory.set(world, memory);
   await writeAgentMemory(world, key, value);
@@ -1019,6 +1129,7 @@ async function remember(world: WorldId, key: string, value: string) {
       provider: agentMemoryStatus.connected ? "iris" : "redis-hash",
     },
     false,
+    { world, tx },
   );
   if (!redis.client || !redis.connected) return;
   await redis.client.hSet(`signal:memory:${world}`, key, value);
@@ -1068,8 +1179,14 @@ async function retrieveMemoryContext(world: WorldId, prompt: string): Promise<Me
       });
       const memories = results.memories.map((memory) => memory.text).filter(Boolean);
       if (memories.length) {
-        const context: MemoryContext = { provider: "iris", memories };
-        await cacheEffect("builder-memory", { world, prompt, provider: "iris" }, context, false);
+        const effect = await cacheEffect(
+          "builder-memory",
+          { world, prompt, provider: "iris" },
+          { provider: "iris", memories },
+          false,
+          { world },
+        );
+        const context: MemoryContext = { provider: "iris", memories, effects: [effect] };
         return context;
       }
     } catch (error) {
@@ -1083,8 +1200,14 @@ async function retrieveMemoryContext(world: WorldId, prompt: string): Promise<Me
   const memories = Object.entries(localMemory).map(([key, value]) => `${key}=${value}`);
   if (!memories.length) return undefined;
 
-  const context: MemoryContext = { provider: "redis-hash", memories };
-  await cacheEffect("builder-memory", { world, prompt, provider: "redis-hash" }, context, false);
+  const effect = await cacheEffect(
+    "builder-memory",
+    { world, prompt, provider: "redis-hash" },
+    { provider: "redis-hash", memories },
+    false,
+    { world },
+  );
+  const context: MemoryContext = { provider: "redis-hash", memories, effects: [effect] };
   return context;
 }
 
@@ -1130,12 +1253,16 @@ async function writeRedisStream(event: string, payload: object) {
 function broadcast(world: WorldId, state: WorldState) {
   const clients = sseClients.get(world);
   if (!clients) return;
+  const dead: ReadableStreamDefaultController[] = [];
   for (const controller of clients) {
     try {
       writeSse(controller, "state", state);
     } catch {
-      clients.delete(controller);
+      dead.push(controller);
     }
+  }
+  for (const controller of dead) {
+    clients.delete(controller);
   }
 }
 
@@ -1158,6 +1285,35 @@ function parseOptionalInt(value: string | undefined): number | undefined {
 
 function summarize(prompt: string) {
   return prompt.length > 48 ? `${prompt.slice(0, 45)}...` : prompt;
+}
+
+function shouldGroundPrompt(
+  prompt: string,
+  intent: Extract<SignalPacket, { type: "renderWidget" }>["intent"],
+) {
+  if (intent === "competitors" || intent === "research") return true;
+  const normalized = prompt.toLowerCase();
+  return [
+    "research",
+    "source",
+    "sources",
+    "cite",
+    "citation",
+    "web",
+    "search",
+    "lookup",
+    "look up",
+    "latest",
+    "current",
+    "news",
+    "market",
+    "compare",
+    "comparison",
+    "vendor",
+    "vendors",
+    "alternative",
+    "alternatives",
+  ].some((term) => normalized.includes(term));
 }
 
 function preferenceHintsFromPrompt(prompt: string): Array<{ key: keyof WorldPreferences; value: string }> {
@@ -1226,7 +1382,13 @@ function normalizeGeminiSignal(
 }
 
 function isRenderIntent(value: unknown): value is Extract<SignalPacket, { type: "renderWidget" }>["intent"] {
-  return value === "revenue" || value === "competitors" || value === "pipeline" || value === "summary";
+  return (
+    value === "revenue" ||
+    value === "competitors" ||
+    value === "research" ||
+    value === "pipeline" ||
+    value === "summary"
+  );
 }
 
 function isPresentation(value: string): value is WorldPreferences["presentation"] {

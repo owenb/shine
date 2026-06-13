@@ -16,7 +16,7 @@ export type CommandInput = z.infer<typeof CommandSchema>;
 export type SignalPacket =
   | {
       type: "renderWidget";
-      intent: "revenue" | "competitors" | "pipeline" | "summary";
+      intent: "revenue" | "competitors" | "research" | "pipeline" | "summary";
       prompt: string;
     }
   | {
@@ -46,7 +46,7 @@ export type Grounding = {
   answer: string;
   sources: Source[];
   reused: boolean;
-  provider: "linkup" | "fallback";
+  provider: "linkup";
 };
 
 export type SignalSurfaceData = {
@@ -188,7 +188,7 @@ export type WorldState = {
     body: string;
   } | null;
   agent: {
-    provider: "gemini" | "heuristic";
+    provider: "gemini";
     model: string;
     reused: boolean;
     grounded: boolean;
@@ -207,6 +207,9 @@ export type WorldState = {
       namespace: string;
       error?: string;
     };
+  };
+  linkup: {
+    configured: boolean;
   };
 };
 
@@ -234,81 +237,6 @@ export function defaultPreferences(world: WorldId): WorldPreferences {
   };
 }
 
-export function signalFromPrompt(prompt: string): SignalPacket {
-  const normalized = prompt.toLowerCase();
-  if (normalized.includes("cloth") || normalized.includes("fabric")) {
-    return {
-      type: "setPreference",
-      key: "renderer",
-      value: "fabric",
-      prompt,
-    };
-  }
-  if (normalized.includes("voice") || normalized.includes("narrate") || normalized.includes("speak")) {
-    return {
-      type: "setPreference",
-      key: "renderer",
-      value: "voice",
-      prompt,
-    };
-  }
-  if (normalized.includes("dom") || normalized.includes("normal renderer")) {
-    return {
-      type: "setPreference",
-      key: "renderer",
-      value: "dom",
-      prompt,
-    };
-  }
-  if (normalized.includes("prefer") || normalized.includes("calmer")) {
-    if (normalized.includes("table")) {
-      return {
-        type: "setPreference",
-        key: "presentation",
-        value: "table",
-        prompt,
-      };
-    }
-    if (normalized.includes("brief") || normalized.includes("terse")) {
-      return {
-        type: "setPreference",
-        key: "presentation",
-        value: "brief",
-        prompt,
-      };
-    }
-    return {
-      type: "setPreference",
-      key: "tone",
-      value: "calm",
-      prompt,
-    };
-  }
-
-  if (normalized.includes("component") || normalized.includes("custom")) {
-    return {
-      type: "setPreference",
-      key: "component",
-      value: normalized.includes("table") ? "ledger" : "brief",
-      prompt,
-    };
-  }
-
-  if (normalized.includes("competitor") || normalized.includes("stripe")) {
-    return { type: "renderWidget", intent: "competitors", prompt };
-  }
-
-  if (normalized.includes("pipeline") || normalized.includes("sales")) {
-    return { type: "renderWidget", intent: "pipeline", prompt };
-  }
-
-  if (normalized.includes("summary") || normalized.includes("status")) {
-    return { type: "renderWidget", intent: "summary", prompt };
-  }
-
-  return { type: "renderWidget", intent: "revenue", prompt };
-}
-
 export function composeSurface(
   world: WorldId,
   preferences: WorldPreferences,
@@ -321,7 +249,7 @@ export function composeSurface(
     preferences.presentation === "table" ||
     (world === "world-b" && preferences.presentation !== "visual");
   const kind: SurfaceKind =
-    intent === "competitors"
+    intent === "competitors" || intent === "research"
       ? "sources"
       : useTable
         ? "table"
@@ -567,38 +495,31 @@ export function accentForComponent(component: ComponentVariant) {
 }
 
 function dataForIntent(
-  intent: "revenue" | "competitors" | "pipeline" | "summary",
+  intent: "revenue" | "competitors" | "research" | "pipeline" | "summary",
   preferences: WorldPreferences,
   tx: number,
   grounding?: Grounding,
 ): SignalSurfaceData {
   const suffix = preferences.presentation === "table" ? "as rows" : "as motion";
-  if (intent === "competitors") {
-    const groundedSources = grounding?.sources?.length
-      ? grounding.sources
-      : [
-          {
-            title: "Adyen",
-            label: "adyen.com",
-            url: "https://www.adyen.com",
-          },
-          {
-            title: "Checkout.com",
-            label: "checkout.com",
-            url: "https://www.checkout.com",
-          },
-          {
-            title: "Paddle",
-            label: "paddle.com",
-            url: "https://www.paddle.com",
-          },
-        ];
+  if (intent === "competitors" || intent === "research") {
+    const groundedSources = grounding?.sources ?? [];
+    const rows = groundedSources.length
+      ? groundedSources.map((source) => ({
+          source: source.title,
+          domain: source.label,
+          signal: source.snippet ? source.snippet.slice(0, 64) : "Live citation",
+        }))
+      : [];
     return {
-      title: "Stripe competitor pulse",
+      title: intent === "competitors" ? "Stripe competitor pulse" : "Research pulse",
       subtitle:
         grounding?.answer ??
-        "Grounded panel placeholder. LinkUp will replace this with live cited data.",
-      stat: { label: "Signals", value: String(Math.max(groundedSources.length, 3)), delta: grounding?.reused ? "cached" : "+2" },
+        "Live citations unavailable until LINKUP_API_KEY is configured.",
+      stat: {
+        label: "Sources",
+        value: String(groundedSources.length),
+        delta: grounding?.reused ? "cached" : grounding ? "live" : "not configured",
+      },
       trend: [
         { label: "Mon", value: 18 },
         { label: "Tue", value: 28 },
@@ -606,11 +527,7 @@ function dataForIntent(
         { label: "Thu", value: 34 },
         { label: "Fri", value: 41 },
       ],
-      rows: [
-        { company: "Adyen", signal: "Enterprise checkout", momentum: "High" },
-        { company: "Checkout.com", signal: "Global acquiring", momentum: "Medium" },
-        { company: "Paddle", signal: "Merchant of record", momentum: "Rising" },
-      ],
+      rows,
       sources: groundedSources,
       memoryNote: `Rendered ${suffix}`,
       txLabel: `tx ${String(tx).padStart(3, "0")}`,

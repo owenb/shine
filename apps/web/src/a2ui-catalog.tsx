@@ -158,12 +158,16 @@ const renderers = {
         <p>{props.subtitle}</p>
       </div>
       <div className="source-list">
-        {props.sources.map((source) => (
-          <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>
-            <span>{source.title}</span>
-            <small>{source.label}</small>
-          </a>
-        ))}
+        {props.sources.length ? (
+          props.sources.map((source) => (
+            <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>
+              <span>{source.title}</span>
+              <small>{source.label}</small>
+            </a>
+          ))
+        ) : (
+          <div className="source-empty">No live citations</div>
+        )}
       </div>
     </div>
   ),

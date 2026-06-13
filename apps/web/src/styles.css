@@ -440,6 +440,13 @@ cpk-web-inspector {
   font-variant-numeric: tabular-nums;
 }
 
+.source-empty {
+  border-top: 1px solid var(--line);
+  padding: 14px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .empty-widget {
   width: min(560px, calc(100vw - 44px));
   height: 260px;
@@ -449,6 +456,133 @@ cpk-web-inspector {
   backdrop-filter: blur(18px);
   box-shadow: var(--sh-2);
   animation: shimmer 2.4s var(--ease) infinite;
+}
+
+/* ── Flight Recorder (sponsor-proof HUD) ─────────────────────────────────── */
+.flight-panel {
+  position: fixed;
+  top: 72px;
+  left: 24px;
+  z-index: 2;
+  width: 264px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--glass-strong);
+  box-shadow: var(--sh-2);
+  backdrop-filter: blur(24px) saturate(1.3);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  animation: surface-in var(--t-slow) var(--ease);
+}
+
+.flight-head,
+.flight-line,
+.flight-memory {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.flight-head {
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.flight-head strong,
+.flight-line strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.flight-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.proof-badge,
+.flight-memory mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--muted);
+  padding: 5px 8px;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  transition: border-color var(--t), background var(--t), color var(--t);
+}
+
+.proof-badge.active {
+  border-color: rgba(20, 176, 131, 0.32);
+  background: rgba(20, 176, 131, 0.1);
+  color: #0f8f63;
+}
+
+.proof-badge small {
+  color: var(--faint);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.flight-memory {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.flight-memory mark {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.flight-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: var(--pill);
+  background: #d4d5db;
+}
+
+.flight-dot.on {
+  background: var(--green);
+  box-shadow: 0 0 0 0 rgba(20, 176, 131, 0.5);
+  animation: dot-pulse 2.6s var(--ease) infinite;
+}
+
+.flight-list,
+.flight-effects {
+  display: grid;
+  gap: 7px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.flight-line {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.flight-line span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── Fabric + voice renderers ────────────────────────────────────────────── */
@@ -869,6 +1003,11 @@ cpk-web-inspector {
   .topbar {
     padding: 0 16px;
   }
+
+  .flight-panel {
+    display: none;
+  }
+
   .canvas {
     padding-bottom: 176px;
   }
