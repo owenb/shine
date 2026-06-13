@@ -400,7 +400,7 @@ function drawNode(ctx: CanvasRenderingContext2D, node: SceneNode) {
   if (node.type === "text") {
     ctx.fillStyle = node.color;
     ctx.font = `${node.fontWeight} ${node.fontSize}px Inter, system-ui, sans-serif`;
-    wrapText(ctx, node.text, node.x, node.y, node.maxWidth, node.lineHeight);
+    wrapText(ctx, node.text, node.x, node.y, node.maxWidth, node.lineHeight, node.maxLines);
     return;
   }
 
@@ -504,18 +504,31 @@ function wrapText(
   y: number,
   maxWidth: number,
   lineHeight: number,
+  maxLines?: number,
 ) {
   const words = text.split(" ");
+  const lines: string[] = [];
   let line = "";
   for (const word of words) {
     const testLine = line ? `${line} ${word}` : word;
     if (ctx.measureText(testLine).width > maxWidth && line) {
-      ctx.fillText(line, x, y);
+      lines.push(line);
       line = word;
-      y += lineHeight;
     } else {
       line = testLine;
     }
   }
-  ctx.fillText(line, x, y);
+  lines.push(line);
+
+  const limit = maxLines && maxLines > 0 ? maxLines : lines.length;
+  const visible = lines.slice(0, limit);
+  // If we had to drop lines, ellipsise the final visible line to fit maxWidth.
+  if (lines.length > limit && visible.length) {
+    let last = visible[visible.length - 1];
+    while (last && ctx.measureText(`${last}…`).width > maxWidth) {
+      last = last.slice(0, -1).trimEnd();
+    }
+    visible[visible.length - 1] = `${last}…`;
+  }
+  visible.forEach((entry, index) => ctx.fillText(entry, x, y + index * lineHeight));
 }

@@ -26,8 +26,14 @@ export const LayoutPatchSchema = z.object({
   frame: WidgetFrameSchema,
 });
 
+export const LayoutDeleteSchema = z.object({
+  world: WorldIdSchema,
+  surfaceId: z.string().min(1).max(120),
+});
+
 export type WidgetFrame = z.infer<typeof WidgetFrameSchema>;
 export type LayoutPatchInput = z.infer<typeof LayoutPatchSchema>;
+export type LayoutDeleteInput = z.infer<typeof LayoutDeleteSchema>;
 
 export type DesktopLayout = {
   widgets: Record<string, WidgetFrame>;
@@ -121,6 +127,8 @@ export type SceneNode =
       fontSize: number;
       fontWeight: number;
       color: string;
+      /** Cap the number of wrapped lines; the last line is ellipsised. */
+      maxLines?: number;
     }
   | {
       type: "rule";
@@ -203,7 +211,9 @@ export type WorldState = {
   selectedTx: number;
   preferences: WorldPreferences;
   surface: SignalSurface | null;
+  surfaces: SignalSurface[];
   scene: SignalScene | null;
+  scenes: Record<string, SignalScene>;
   timeline: TimelineItem[];
   receipts: Receipt[];
   componentModule: {
@@ -285,6 +295,7 @@ export function composeSurface(
   signal: SignalPacket,
   tx: number,
   grounding?: Grounding,
+  surfaceId = SURFACE_ID,
 ): SignalSurface {
   const intent = signal.type === "renderWidget" ? signal.intent : "summary";
   const useTable =
@@ -313,14 +324,14 @@ export function composeSurface(
     {
       version: "v0.9",
       createSurface: {
-        surfaceId: SURFACE_ID,
+        surfaceId,
         catalogId: CATALOG_ID,
       },
     },
     {
       version: "v0.9",
       updateComponents: {
-        surfaceId: SURFACE_ID,
+        surfaceId,
         components: [
           {
             id: "root",
@@ -362,7 +373,7 @@ export function composeSurface(
     {
       version: "v0.9",
       updateDataModel: {
-        surfaceId: SURFACE_ID,
+        surfaceId,
         path: "/",
         value: data,
       },
@@ -370,7 +381,7 @@ export function composeSurface(
   ];
 
   return {
-    surfaceId: SURFACE_ID,
+    surfaceId,
     catalogId: CATALOG_ID,
     kind,
     variant: preferences.component,
@@ -439,11 +450,12 @@ export function composeScene(surface: SignalSurface, preferences: WorldPreferenc
         text: source.title,
         x: 88,
         y,
-        maxWidth: 420,
+        maxWidth: 560,
         lineHeight: 28,
-        fontSize: 22,
+        fontSize: 21,
         fontWeight: 600,
         color: "#111114",
+        maxLines: 1,
       });
       nodes.push({
         type: "text",
@@ -451,11 +463,12 @@ export function composeScene(surface: SignalSurface, preferences: WorldPreferenc
         text: source.label,
         x: 690,
         y,
-        maxWidth: 140,
+        maxWidth: 142,
         lineHeight: 24,
         fontSize: 18,
         fontWeight: 400,
         color: "#8a8c94",
+        maxLines: 1,
       });
       hotspots.push({
         id: `source-${index}`,
@@ -486,11 +499,12 @@ export function composeScene(surface: SignalSurface, preferences: WorldPreferenc
         text: values[0] ?? "",
         x: 88,
         y,
-        maxWidth: 330,
+        maxWidth: 400,
         lineHeight: 28,
-        fontSize: 22,
+        fontSize: 21,
         fontWeight: 600,
         color: "#111114",
+        maxLines: 1,
       });
       nodes.push({
         type: "text",
@@ -498,11 +512,12 @@ export function composeScene(surface: SignalSurface, preferences: WorldPreferenc
         text: values.slice(1).join("  "),
         x: 520,
         y,
-        maxWidth: 300,
+        maxWidth: 312,
         lineHeight: 28,
         fontSize: 20,
         fontWeight: 400,
         color: "#8a8c94",
+        maxLines: 1,
       });
     });
   } else if (surface.kind === "trend") {

@@ -20,6 +20,7 @@ import { cors } from "hono/cors";
 import {
   CATALOG_ID,
   CommandSchema,
+  LayoutDeleteSchema,
   LayoutPatchSchema,
   SURFACE_ID,
   composeSurface,
@@ -33,6 +34,7 @@ import {
   type Grounding,
   type CommandInput,
   type DesktopLayout,
+  type LayoutDeleteInput,
   type LayoutPatchInput,
   type Receipt,
   type SignalSurface,
@@ -258,6 +260,16 @@ app.post("/api/layout", async (c) => {
   return c.json(state);
 });
 
+app.post("/api/layout/delete", async (c) => {
+  const raw = await c.req.json().catch(() => null);
+  const parsed = LayoutDeleteSchema.safeParse(raw);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid layout delete", details: parsed.error.flatten() }, 400);
+  }
+  const state = await applyLayoutDelete(parsed.data);
+  return c.json(state);
+});
+
 app.post("/api/tts", async (c) => {
   const raw = (await c.req.json().catch(() => null)) as
     | { text?: unknown; voice?: unknown }
@@ -438,6 +450,35 @@ async function applyLayoutPatch(input: LayoutPatchInput): Promise<WorldState> {
     frame,
   });
   const state = getWorldState(input.world, tx);
+  broadcast(input.world, state);
+  return state;
+}
+
+async function applyLayoutDelete(input: LayoutDeleteInput): Promise<WorldState> {
+  const currentLayout = getCurrentLayout(input.world);
+  const { [input.surfaceId]: _deleted, ...widgets } = currentLayout.widgets;
+  const layout: DesktopLayout = { widgets };
+  const tx = insertTx(input.world, `Removed ${input.surfaceId} widget`);
+  insertFact(tx, input.world, "layout", "desktop", layout);
+  const receipt = insertReceipt(
+    tx,
+    input.world,
+    true,
+    "LAYOUT_DELETED",
+    `Removed ${input.surfaceId} from ${input.world}.`,
+  );
+  await writeRedisStream("layout", {
+    world: input.world,
+    tx,
+    surfaceId: input.surfaceId,
+    deleted: true,
+  });
+  const state = getWorldState(input.world, tx);
+  await writeRedisStream("receipt", {
+    world: input.world,
+    tx,
+    receipts: [receipt],
+  });
   broadcast(input.world, state);
   return state;
 }

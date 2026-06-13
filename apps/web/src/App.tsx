@@ -29,7 +29,6 @@ import { VoiceSurface } from "./VoiceSurface";
 import { ShineBackground } from "./ShineBackground";
 import { Scrubber } from "./Scrubber";
 import { backgroundChoices, users, type BgPalette } from "./users";
-import shineLogo from "./assets/shine-logo.png";
 
 type RendererKind = "dom" | "fabric" | "voice";
 
@@ -61,8 +60,9 @@ function SignalApp() {
   const inflightState = useRef(new Map<string, Promise<WorldState>>());
   const user = users.find((item) => item.id === userId) ?? users[0];
   const world: WorldId = user.world;
-  const backgroundId = backgroundByUser[user.id];
-  const selectedBackground = backgroundChoices.find((choice) => choice.id === backgroundId);
+  const selectedBackground =
+    backgroundChoices.find((choice) => choice.id === backgroundByUser[user.id]) ?? backgroundChoices[0];
+  const activeBackgroundId = selectedBackground?.id ?? "";
   const palette: BgPalette = selectedBackground?.bg ?? user.bg;
   const { copilotkit } = useCopilotKit();
   const { agent } = useAgent({
@@ -266,8 +266,8 @@ function SignalApp() {
         style={{ ...(componentStyle ?? {}), ...user.theme } as CSSProperties}
       >
         <header className="topbar">
-          <div className="brand">
-            <img src={shineLogo} alt="Shine" className="brand-logo" />
+          <div className="brand" aria-label="Shine">
+            <span className="brand-logo" aria-hidden="true" />
           </div>
           <div className="user-switcher" role="radiogroup" aria-label="User">
             <span className="user-name">{user.name}</span>
@@ -291,20 +291,21 @@ function SignalApp() {
                 </button>
               ))}
             </div>
-            <div className="bg-switcher" aria-label="Background">
-              {backgroundChoices.map((choice) => (
-                <button
-                  key={choice.id}
-                  type="button"
-                  aria-label={`${choice.label} background`}
-                  className={choice.id === selectedBackground?.id ? "bg-swatch selected" : "bg-swatch"}
-                  style={{ background: choice.swatch }}
-                  onClick={() => chooseBackground(choice.id)}
-                />
-              ))}
-            </div>
           </div>
         </header>
+        <div className="bg-switcher" aria-label="Background" role="group">
+          {backgroundChoices.map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              aria-label={`${choice.label} background`}
+              title={choice.label}
+              className={choice.id === activeBackgroundId ? "bg-swatch selected" : "bg-swatch"}
+              style={{ background: choice.swatch }}
+              onClick={() => chooseBackground(choice.id)}
+            />
+          ))}
+        </div>
 
         <section className="canvas" aria-label="A2UI Surface">
           <DesktopSurface state={state} renderer={activeRenderer} onLayoutCommit={commitLayout} />

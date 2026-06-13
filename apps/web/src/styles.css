@@ -85,25 +85,32 @@ button {
 }
 
 .topbar {
+  position: relative;
+  z-index: 30;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 0 28px;
 }
 
 .brand {
+  position: absolute;
+  left: 28px;
+  top: 50%;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
-  width: 136px;
-  min-width: 136px;
+  width: 112px;
+  min-width: 112px;
   pointer-events: none;
 }
 
 .brand-logo {
   display: block;
   width: 100%;
-  height: auto;
-  opacity: 0.3;
+  aspect-ratio: 1131 / 457;
+  background: url("./assets/shine-logo.png") center / contain no-repeat;
+  opacity: 0.2;
 }
 
 .memory-dot {
@@ -171,14 +178,19 @@ button {
 }
 
 .bg-switcher {
-  display: inline-flex;
+  position: absolute;
+  z-index: 30;
+  top: 72px;
+  right: 28px;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 10px;
 }
 
 .bg-swatch {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border: 1px solid rgba(17, 17, 20, 0.08);
   border-radius: 999px;
   padding: 0;
@@ -844,6 +856,25 @@ button {
 @media (max-width: 760px) {
   .topbar {
     padding: 0 16px;
+  }
+
+  .brand {
+    left: 16px;
+    width: 86px;
+    min-width: 86px;
+  }
+
+  .user-switcher {
+    gap: 8px;
+  }
+
+  .user-name {
+    display: none;
+  }
+
+  .bg-switcher {
+    top: 64px;
+    right: 16px;
   }
 
   .canvas {
