@@ -217,7 +217,7 @@ export type WorldState = {
     reused: boolean;
     grounded: boolean;
     memory?: {
-      provider: "iris" | "redis-hash";
+      provider: "redis-hash";
       count: number;
     };
   } | null;
@@ -225,12 +225,6 @@ export type WorldState = {
     configured: boolean;
     connected: boolean;
     memory: Record<string, string>;
-    agentMemory: {
-      configured: boolean;
-      connected: boolean;
-      namespace: string;
-      error?: string;
-    };
   };
   linkup: {
     configured: boolean;

@@ -14,7 +14,6 @@
     "@google/genai": "2.8.0",
     "@hono/node-server": "2.0.4",
     "@sig/core": "workspace:*",
-    "agent-memory-client": "0.3.1",
     "ai": "6.0.104",
     "dotenv": "17.4.2",
     "hono": "4.12.25",

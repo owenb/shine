@@ -416,7 +416,6 @@ function FlightRecorderPanel({
         ) : (
           <mark>empty</mark>
         )}
-        <mark>{state?.redis.agentMemory.connected ? "Iris on" : "Iris off"}</mark>
       </div>
 
       <div className="flight-list" aria-label="Receipts">

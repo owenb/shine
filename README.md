@@ -101,7 +101,7 @@ flowchart LR
 - **[AG-UI](https://docs.ag-ui.com)** — the transport. The agent streams `CUSTOM` + `STATE_SNAPSHOT` + `TEXT_MESSAGE_*` events the frontend consumes.
 - **[A2UI v0.9](https://a2ui.org)** — the canonical UI protocol. Our ops match `@a2ui/web_core` field‑for‑field and render through the real `@copilotkit/a2ui-renderer`. The **full standard A2UI catalog is enabled** (`includeBasicCatalog: true`), so the renderer paints *anything* a future agent — or an **A2A partner** — sends, not just our five custom components.
 - **[Gemini](https://aistudio.google.com)** — `gemini-3.1-flash-lite` compiles Signal. If Gemini fails, the command fails; there is no heuristic fallback. Gemini TTS speaks the voice lens.
-- **[Redis](https://redis.io/iris)** — Agent Memory (`agent-memory-client`), effect/semantic cache, Streams event bus, pub/sub.
+- **[Redis](https://redis.io)** — world-scoped memory hashes, effect cache, Streams event bus, pub/sub.
 - **[LinkUp](https://www.linkup.so)** — sourced, cited web answers piped into A2UI panels when `LINKUP_API_KEY` is set; without it the app shows an honest ungrounded state.
 - **Vite + Hono + TypeScript** — an all‑TS monorepo, no build step between packages.
 
@@ -130,7 +130,6 @@ cp .env.example .env.local
 # optional, but they light up the sponsor story:
 #   LINKUP_API_KEY          → live cited web grounding
 #   REDIS_URL               → memory + cache + event bus
-#   AGENT_MEMORY_BASE_URL   → Redis Agent Memory (Iris)
 
 pnpm dev          # web on http://localhost:5173, server on :8787
 ```
@@ -150,7 +149,6 @@ pnpm typecheck    # type-check every package
 | `GEMINI_MODEL` | – | Defaults to `gemini-3.1-flash-lite`. |
 | `LINKUP_API_KEY` | – | Live, cited web grounding (free tier ~4k queries). |
 | `REDIS_URL` | – | Memory hashes, effect cache, Streams, pub/sub. |
-| `AGENT_MEMORY_BASE_URL` | – | Redis Agent Memory (Iris) server. |
 
 ---
 

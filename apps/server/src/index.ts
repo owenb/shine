@@ -11,12 +11,6 @@ import {
   createCopilotEndpoint,
 } from "@copilotkit/runtime/v2";
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/client";
-import {
-  MemoryAPIClient,
-  Topics,
-  UserId,
-  type MemoryRecord,
-} from "agent-memory-client";
 import { GoogleGenAI } from "@google/genai";
 import { config as loadEnv } from "dotenv";
 import { LinkupClient } from "linkup-sdk";
@@ -115,7 +109,7 @@ type ServerRedis = {
 };
 
 type MemoryContext = {
-  provider: "iris" | "redis-hash";
+  provider: "redis-hash";
   memories: string[];
   effects: EffectUse[];
 };
@@ -126,31 +120,17 @@ type EffectUse = {
   role?: AgentRole;
 };
 
+type CommandResult = {
+  receipt: Receipt;
+  state: WorldState;
+};
+
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const redis: ServerRedis = {
   configured: true,
   connected: false,
   client: null,
   memory: new Map(),
-};
-const agentMemoryBaseUrl =
-  process.env.AGENT_MEMORY_BASE_URL ??
-  process.env.REDIS_AGENT_MEMORY_URL ??
-  process.env.IRIS_MEMORY_URL;
-const agentMemoryNamespace = process.env.AGENT_MEMORY_NAMESPACE ?? "signal-ui";
-const agentMemory = agentMemoryBaseUrl
-  ? new MemoryAPIClient({
-      baseUrl: agentMemoryBaseUrl,
-      apiKey: process.env.AGENT_MEMORY_API_KEY ?? process.env.REDIS_AGENT_MEMORY_API_KEY,
-      bearerToken: process.env.AGENT_MEMORY_BEARER_TOKEN,
-      defaultNamespace: agentMemoryNamespace,
-      timeout: 8_000,
-    })
-  : null;
-const agentMemoryStatus: WorldState["redis"]["agentMemory"] = {
-  configured: Boolean(agentMemory),
-  connected: false,
-  namespace: agentMemoryNamespace,
 };
 const geminiApiKey = process.env.GEMINI_API_KEY;
 const geminiModel = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite";
@@ -164,7 +144,6 @@ const linkup = process.env.LINKUP_API_KEY
   : null;
 
 void connectRedis();
-void connectAgentMemory();
 seedIfEmpty();
 
 const app = new Hono();
@@ -192,7 +171,6 @@ app.get("/api/health", (c) =>
   c.json({
     ok: true,
     redis: { configured: redis.configured, connected: redis.connected },
-    agentMemory: agentMemoryStatus,
     gemini: {
       configured: Boolean(gemini),
       model: geminiModel,
@@ -237,8 +215,8 @@ app.post("/api/command", async (c) => {
     return c.json({ error: "Invalid command", details: parsed.error.flatten() }, 400);
   }
   try {
-    const receipt = await applyAgentCommand(parsed.data);
-    return c.json(getWorldState(parsed.data.world, receipt.tx));
+    const result = await applyAgentCommand(parsed.data);
+    return c.json(result.state);
   } catch (error) {
     return c.json(
       {
@@ -257,8 +235,8 @@ app.post("/api/agent", async (c) => {
     return c.json({ error: "Invalid command", details: parsed.error.flatten() }, 400);
   }
   try {
-    const receipt = await applyAgentCommand({ ...parsed.data, source: "composer" });
-    return c.json(getWorldState(parsed.data.world, receipt.tx));
+    const result = await applyAgentCommand({ ...parsed.data, source: "composer" });
+    return c.json(result.state);
   } catch (error) {
     return c.json(
       {
@@ -276,8 +254,8 @@ app.post("/api/layout", async (c) => {
   if (!parsed.success) {
     return c.json({ error: "Invalid layout patch", details: parsed.error.flatten() }, 400);
   }
-  const receipt = await applyLayoutPatch(parsed.data);
-  return c.json(getWorldState(parsed.data.world, receipt.tx));
+  const state = await applyLayoutPatch(parsed.data);
+  return c.json(state);
 });
 
 app.post("/api/tts", async (c) => {
@@ -375,20 +353,6 @@ async function connectRedis() {
   }
 }
 
-async function connectAgentMemory() {
-  if (!agentMemory) return;
-  try {
-    await agentMemory.healthCheck();
-    agentMemoryStatus.connected = true;
-    agentMemoryStatus.error = undefined;
-    console.log("[agent-memory] connected");
-  } catch (error) {
-    agentMemoryStatus.connected = false;
-    agentMemoryStatus.error = error instanceof Error ? error.message : String(error);
-    console.warn("[agent-memory] unavailable:", agentMemoryStatus.error);
-  }
-}
-
 function seedIfEmpty() {
   const count = db.prepare("SELECT COUNT(*) AS count FROM txs").get() as { count: number };
   if (count.count > 0) return;
@@ -414,7 +378,7 @@ function seedIfEmpty() {
   }
 }
 
-async function applyAgentCommand(input: CommandInput): Promise<Receipt> {
+async function applyAgentCommand(input: CommandInput): Promise<CommandResult> {
   const memoryContext = await retrieveMemoryContext(input.world, input.prompt);
   const signalResult = await resolveSignal(input.world, input.prompt, memoryContext);
   let signal = signalResult.signal;
@@ -447,12 +411,12 @@ async function applyAgentCommand(input: CommandInput): Promise<Receipt> {
   });
 }
 
-async function applyLayoutPatch(input: LayoutPatchInput): Promise<Receipt> {
-  const current = getWorldState(input.world);
+async function applyLayoutPatch(input: LayoutPatchInput): Promise<WorldState> {
+  const currentLayout = getCurrentLayout(input.world);
   const frame = normalizeWidgetFrame(input.frame);
   const layout: DesktopLayout = {
     widgets: {
-      ...current.layout.widgets,
+      ...currentLayout.widgets,
       [input.surfaceId]: frame,
     },
   };
@@ -473,7 +437,7 @@ async function applyLayoutPatch(input: LayoutPatchInput): Promise<Receipt> {
   });
   const state = getWorldState(input.world, tx);
   broadcast(input.world, state);
-  return receipt;
+  return state;
 }
 
 async function* runSignalBuilderAgent(input: RunAgentInput): AsyncIterable<BaseEvent> {
@@ -490,8 +454,8 @@ async function* runSignalBuilderAgent(input: RunAgentInput): AsyncIterable<BaseE
     value: { world, prompt },
   };
 
-  const receipt = await applyAgentCommand({ world, prompt, source: "copilotkit" });
-  const roleReceipts = getReceiptsForTx(world, receipt.tx);
+  const result = await applyAgentCommand({ world, prompt, source: "copilotkit" });
+  const roleReceipts = getReceiptsForTx(world, result.receipt.tx);
   for (const roleReceipt of roleReceipts) {
     if (!roleReceipt.role) continue;
     yield {
@@ -500,7 +464,7 @@ async function* runSignalBuilderAgent(input: RunAgentInput): AsyncIterable<BaseE
       value: { world, tx: roleReceipt.tx, receipt: roleReceipt },
     };
   }
-  const state = getWorldState(world, receipt.tx);
+  const state = result.state;
 
   yield {
     type: EventType.STATE_SNAPSHOT,
@@ -523,7 +487,7 @@ async function* runSignalBuilderAgent(input: RunAgentInput): AsyncIterable<BaseE
   yield {
     type: EventType.CUSTOM,
     name: "signal.ui.state",
-    value: { receipt, state },
+    value: { receipt: result.receipt, state },
   };
 }
 
@@ -541,9 +505,8 @@ async function applySignalCommand({
   memoryContext?: MemoryContext;
   effects?: EffectUse[];
   agent: NonNullable<WorldState["agent"]>;
-}): Promise<Receipt> {
-  const current = getWorldState(input.world);
-  const nextPrefs = { ...current.preferences };
+}): Promise<CommandResult> {
+  const nextPrefs = { ...getCurrentPreferences(input.world) };
   const tx = insertTx(input.world, summarize(input.prompt));
   await annotateEffectUses(effects ?? [], input.world, tx);
   const preferenceChanges: Array<{
@@ -618,7 +581,6 @@ async function applySignalCommand({
   let researcherReceipt: Receipt | undefined;
   if (grounding) {
     insertFact(tx, input.world, "researcher", "grounding", grounding);
-    await writeResearchWorkingMemory(input.world, tx, grounding);
     researcherReceipt = insertReceipt(
       tx,
       input.world,
@@ -669,7 +631,7 @@ async function applySignalCommand({
     receipts: [curatorReceipt, researcherReceipt, receipt].filter(Boolean),
   });
   broadcast(input.world, state);
-  return receipt;
+  return { receipt, state };
 }
 
 function getLatestResearchGrounding(world: WorldId, tx: number): Grounding | undefined {
@@ -759,12 +721,42 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
       configured: redis.configured,
       connected: redis.connected,
       memory: redis.memory.get(world) ?? {},
-      agentMemory: agentMemoryStatus,
     },
     linkup: {
       configured: Boolean(linkup),
     },
   };
+}
+
+function getCurrentPreferences(world: WorldId): WorldPreferences {
+  const row = db
+    .prepare(
+      `SELECT value
+       FROM facts
+       WHERE world = ? AND entity = 'world' AND attr = 'preferences'
+       ORDER BY tx DESC, rowid DESC
+       LIMIT 1`,
+    )
+    .get(world) as { value: string } | undefined;
+  if (!row) return defaultPreferences(world);
+  return {
+    ...defaultPreferences(world),
+    ...(JSON.parse(row.value) as Partial<WorldPreferences>),
+  };
+}
+
+function getCurrentLayout(world: WorldId): DesktopLayout {
+  const row = db
+    .prepare(
+      `SELECT value
+       FROM facts
+       WHERE world = ? AND entity = 'layout' AND attr = 'desktop'
+       ORDER BY tx DESC, rowid DESC
+       LIMIT 1`,
+    )
+    .get(world) as { value: string } | undefined;
+  if (!row) return defaultDesktopLayout(world);
+  return normalizeDesktopLayout(world, JSON.parse(row.value) as FactValue);
 }
 
 function getTimeline(world: WorldId): TimelineItem[] {
@@ -896,7 +888,6 @@ function getFlightRecorder(world: WorldId, atTx?: number) {
     redis: {
       connected: redis.connected,
       memory: redis.memory.get(world) ?? {},
-      agentMemory: agentMemoryStatus,
     },
     linkup: {
       configured: Boolean(linkup),
@@ -1317,13 +1308,12 @@ function cleanGrounding(grounding: Grounding): Grounding {
 async function remember(world: WorldId, tx: number, key: string, value: string) {
   const memory = { ...(redis.memory.get(world) ?? {}), [key]: value };
   redis.memory.set(world, memory);
-  await writeAgentMemory(world, key, value);
   await cacheEffect(
     "curator-memory",
     { world, key },
     {
       value,
-      provider: agentMemoryStatus.connected ? "iris" : "redis-hash",
+      provider: "redis-hash",
     },
     false,
     { world, tx, role: "curator" },
@@ -1334,88 +1324,7 @@ async function remember(world: WorldId, tx: number, key: string, value: string) 
   await redis.client.publish("signal:events", JSON.stringify({ world, type: "memory", key, value }));
 }
 
-async function writeAgentMemory(world: WorldId, key: string, value: string) {
-  if (!agentMemory || !agentMemoryStatus.connected) return;
-  const text = `Signal UI ${world} user preference: ${key}=${value}`;
-  const memory: MemoryRecord = {
-    id: createHash("sha256").update(`${world}:${key}:${value}`).digest("hex").slice(0, 24),
-    text,
-    memory_type: "semantic" as MemoryRecord["memory_type"],
-    topics: ["signal-ui", "preferences", key],
-    entities: [key, value],
-    user_id: world,
-    namespace: agentMemoryNamespace,
-  };
-  try {
-    await agentMemory.createLongTermMemory([memory], { namespace: agentMemoryNamespace });
-    await agentMemory.putWorkingMemory(
-      `signal:${world}`,
-      {
-        user_id: world,
-        namespace: agentMemoryNamespace,
-        data: { preferences: redis.memory.get(world) ?? {} },
-      },
-      { namespace: agentMemoryNamespace, background: true },
-    );
-  } catch (error) {
-    agentMemoryStatus.connected = false;
-    agentMemoryStatus.error = error instanceof Error ? error.message : String(error);
-    console.warn("[agent-memory] write skipped:", agentMemoryStatus.error);
-  }
-}
-
-async function writeResearchWorkingMemory(world: WorldId, tx: number, grounding: Grounding) {
-  if (!agentMemory || !agentMemoryStatus.connected) return;
-  try {
-    await agentMemory.putWorkingMemory(
-      `signal:${world}:research`,
-      {
-        user_id: world,
-        namespace: agentMemoryNamespace,
-        data: {
-          tx,
-          answer: grounding.answer,
-          sources: grounding.sources,
-        },
-      },
-      { namespace: agentMemoryNamespace, background: true },
-    );
-  } catch (error) {
-    agentMemoryStatus.connected = false;
-    agentMemoryStatus.error = error instanceof Error ? error.message : String(error);
-    console.warn("[agent-memory] research write skipped:", agentMemoryStatus.error);
-  }
-}
-
 async function retrieveMemoryContext(world: WorldId, prompt: string): Promise<MemoryContext | undefined> {
-  if (agentMemory && agentMemoryStatus.connected) {
-    try {
-      const results = await agentMemory.searchLongTermMemory({
-        text: prompt,
-        namespace: { eq: agentMemoryNamespace },
-        userId: new UserId({ eq: world }),
-        topics: new Topics({ any: ["signal-ui", "preferences"] }),
-        limit: 5,
-      });
-      const memories = results.memories.map((memory) => memory.text).filter(Boolean);
-      if (memories.length) {
-        const effect = await cacheEffect(
-          "builder-memory",
-          { world, prompt, provider: "iris" },
-          { provider: "iris", memories },
-          false,
-          { world, role: "builder" },
-        );
-        const context: MemoryContext = { provider: "iris", memories, effects: [effect] };
-        return context;
-      }
-    } catch (error) {
-      agentMemoryStatus.connected = false;
-      agentMemoryStatus.error = error instanceof Error ? error.message : String(error);
-      console.warn("[agent-memory] retrieval skipped:", agentMemoryStatus.error);
-    }
-  }
-
   const localMemory = redis.memory.get(world) ?? {};
   const memories = Object.entries(localMemory).map(([key, value]) => `${key}=${value}`);
   if (!memories.length) return undefined;

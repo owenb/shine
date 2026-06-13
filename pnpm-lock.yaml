@@ -38,9 +38,6 @@ importers:
       '@sig/core':
         specifier: workspace:*
         version: link:../../packages/core
-      agent-memory-client:
-        specifier: 0.3.1
-        version: 0.3.1
       ai:
         specifier: 6.0.104
         version: 6.0.104(zod@3.25.75)
@@ -1501,10 +1498,6 @@ packages:
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
-
-  agent-memory-client@0.3.1:
-    resolution: {integrity: sha512-Oyd02/1vlIXZCsVGbcEkGo271QxwSV32LnpbHBzgkIQTFU7H2twJGQE1Sp/XwjibvJIDHqcdyic2suL30lFPvw==}
-    engines: {node: '>=20.0.0'}
 
   ai@6.0.104:
     resolution: {integrity: sha512-boYGxbtdsa1YX3uuN7BV0FvAL3sGq7p/RLAMonK94jyt5C7sKj6jfib3/wD12koqX53htLTI/l4tX0HqNFRMZQ==}
@@ -3472,10 +3465,6 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  ulid@3.0.2:
-    resolution: {integrity: sha512-yu26mwteFYzBAot7KVMqFGCVpsF6g8wXfJzQUHvu1no3+rRRSFcSV2nKeYvNPLD2J4b08jYBDhHUjeH0ygIl9w==}
-    hasBin: true
-
   undici-types@7.16.0:
     resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
 
@@ -5186,10 +5175,6 @@ snapshots:
       - supports-color
 
   agent-base@7.1.4: {}
-
-  agent-memory-client@0.3.1:
-    dependencies:
-      ulid: 3.0.2
 
   ai@6.0.104(zod@3.25.75):
     dependencies:
@@ -7729,8 +7714,6 @@ snapshots:
       mime-types: 3.0.2
 
   typescript@6.0.3: {}
-
-  ulid@3.0.2: {}
 
   undici-types@7.16.0: {}
 
