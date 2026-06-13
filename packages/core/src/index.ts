@@ -47,7 +47,7 @@ export type SignalPacket =
     }
   | {
       type: "setPreference";
-      key: "presentation" | "tone" | "renderer" | "component";
+      key: "presentation" | "tone" | "component";
       value: string;
       prompt: string;
     };
@@ -255,7 +255,7 @@ export function defaultPreferences(world: WorldId): WorldPreferences {
     case "world-c":
       return { presentation: "brief", tone: "calm", renderer: "dom", component: "brief" };
     case "world-d":
-      return { presentation: "visual", tone: "sharp", renderer: "fabric", component: "crystal" };
+      return { presentation: "visual", tone: "sharp", renderer: "dom", component: "crystal" };
     case "world-e":
       return { presentation: "table", tone: "sharp", renderer: "dom", component: "ledger" };
     default:

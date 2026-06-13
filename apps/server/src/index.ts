@@ -127,6 +127,8 @@ type CommandResult = {
   state: WorldState;
 };
 
+type AgentPreferenceKey = Exclude<keyof WorldPreferences, "renderer">;
+
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const redis: ServerRedis = {
   configured: true,
@@ -555,11 +557,11 @@ async function applySignalCommand({
   const currentLayout = getCurrentLayout(input.world);
   await annotateEffectUses(effects ?? [], input.world, tx);
   const preferenceChanges: Array<{
-    key: keyof WorldPreferences;
+    key: AgentPreferenceKey;
     value: string;
   }> = [];
   const learnedChanges: Array<{
-    key: keyof WorldPreferences;
+    key: AgentPreferenceKey;
     value: string;
   }> = [];
 
@@ -580,11 +582,6 @@ async function applySignalCommand({
     }
     if (change.key === "tone" && isTone(change.value)) {
       nextPrefs.tone = change.value;
-      await remember(input.world, tx, change.key, change.value);
-      learnedChanges.push(change);
-    }
-    if (change.key === "renderer" && isRenderer(change.value)) {
-      nextPrefs.renderer = change.value;
       await remember(input.world, tx, change.key, change.value);
       learnedChanges.push(change);
     }
@@ -801,6 +798,7 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
     const value = JSON.parse(fact.value) as FactValue;
     if (fact.entity === "world" && fact.attr === "preferences") {
       preferences = { ...preferences, ...(value as Partial<WorldPreferences>) };
+      preferences.renderer = "dom";
     }
     if (fact.entity === "layout" && fact.attr === "desktop") {
       layout = normalizeDesktopLayout(world, value);
@@ -851,7 +849,7 @@ function getWorldState(world: WorldId, atTx?: number): WorldState {
     redis: {
       configured: redis.configured,
       connected: redis.connected,
-      memory: redis.memory.get(world) ?? {},
+      memory: visibleMemory(world),
     },
     linkup: {
       configured: Boolean(linkup),
@@ -870,10 +868,11 @@ function getCurrentPreferences(world: WorldId): WorldPreferences {
     )
     .get(world) as { value: string } | undefined;
   if (!row) return defaultPreferences(world);
-  return {
+  const preferences = {
     ...defaultPreferences(world),
     ...(JSON.parse(row.value) as Partial<WorldPreferences>),
   };
+  return { ...preferences, renderer: "dom" };
 }
 
 function getCurrentLayout(world: WorldId): DesktopLayout {
@@ -1018,7 +1017,7 @@ function getFlightRecorder(world: WorldId, atTx?: number) {
     selectedTx,
     redis: {
       connected: redis.connected,
-      memory: redis.memory.get(world) ?? {},
+      memory: visibleMemory(world),
     },
     linkup: {
       configured: Boolean(linkup),
@@ -1033,6 +1032,11 @@ function getHeadTx(world: WorldId): number {
     .prepare("SELECT COALESCE(MAX(id), 0) AS tx FROM txs WHERE world = ?")
     .get(world) as { tx: number };
   return row.tx;
+}
+
+function visibleMemory(world: WorldId) {
+  const memory = redis.memory.get(world) ?? {};
+  return Object.fromEntries(Object.entries(memory).filter(([key]) => key !== "renderer"));
 }
 
 function ensureColumn(table: "effects" | "receipts", column: string, definition: string) {
@@ -1110,6 +1114,7 @@ async function resolveSignal(world: WorldId, prompt: string, memoryContext?: Mem
     memory: memoryContext?.memories ?? [],
     model: geminiModel,
     vertexai: geminiVertexai,
+    rendererControl: "keyboard-only",
   };
   const cached = await getCachedEffect<{ signal: SignalPacket }>("gemini-signal", signalCacheInput);
   if (cached) {
@@ -1134,7 +1139,8 @@ async function resolveSignal(world: WorldId, prompt: string, memoryContext?: Mem
               text:
                 "Classify this request for Signal UI. Return JSON only. " +
                 "Allowed render intents: revenue, competitors, research, pipeline, summary. " +
-                "Allowed preferences: presentation=visual|table|brief, tone=calm|sharp, renderer=dom|fabric|voice, component=crystal|ledger|brief. " +
+                "Allowed preferences: presentation=visual|table|brief, tone=calm|sharp, component=crystal|ledger|brief. " +
+                "Renderer selection is controlled only by the local R key; never return renderer preferences. " +
                 (memoryContext?.memories.length
                   ? `Durable user memory: ${memoryContext.memories.join("; ")}. `
                   : "") +
@@ -1152,7 +1158,7 @@ async function resolveSignal(world: WorldId, prompt: string, memoryContext?: Mem
             intent: { type: "string", enum: ["revenue", "competitors", "research", "pipeline", "summary"] },
             key: {
               type: "string",
-              enum: ["presentation", "tone", "renderer", "component"],
+              enum: ["presentation", "tone", "component"],
             },
             value: { type: "string" },
           },
@@ -1457,7 +1463,9 @@ async function remember(world: WorldId, tx: number, key: string, value: string) 
 
 async function retrieveMemoryContext(world: WorldId, prompt: string): Promise<MemoryContext | undefined> {
   const localMemory = redis.memory.get(world) ?? {};
-  const memories = Object.entries(localMemory).map(([key, value]) => `${key}=${value}`);
+  const memories = Object.entries(localMemory)
+    .filter(([key]) => key !== "renderer")
+    .map(([key, value]) => `${key}=${value}`);
   if (!memories.length) return undefined;
 
   const effect = await cacheEffect(
@@ -1576,9 +1584,9 @@ function shouldGroundPrompt(
   ].some((term) => normalized.includes(term));
 }
 
-function preferenceHintsFromPrompt(prompt: string): Array<{ key: keyof WorldPreferences; value: string }> {
+function preferenceHintsFromPrompt(prompt: string): Array<{ key: AgentPreferenceKey; value: string }> {
   const normalized = prompt.toLowerCase();
-  const hints: Array<{ key: keyof WorldPreferences; value: string }> = [];
+  const hints: Array<{ key: AgentPreferenceKey; value: string }> = [];
 
   if (normalized.includes("table") || normalized.includes("rows")) {
     hints.push({ key: "presentation", value: "table" });
@@ -1592,14 +1600,6 @@ function preferenceHintsFromPrompt(prompt: string): Array<{ key: keyof WorldPref
     hints.push({ key: "tone", value: "calm" });
   } else if (normalized.includes("sharp") || normalized.includes("bold")) {
     hints.push({ key: "tone", value: "sharp" });
-  }
-
-  if (normalized.includes("cloth") || normalized.includes("fabric")) {
-    hints.push({ key: "renderer", value: "fabric" });
-  } else if (normalized.includes("voice") || normalized.includes("narrate") || normalized.includes("speak")) {
-    hints.push({ key: "renderer", value: "voice" });
-  } else if (normalized.includes("dom") || normalized.includes("normal renderer")) {
-    hints.push({ key: "renderer", value: "dom" });
   }
 
   if (normalized.includes("ledger component")) {
@@ -1631,9 +1631,6 @@ function normalizeGeminiSignal(
   if (parsed.key === "tone" && isTone(parsed.value)) {
     return { type: "setPreference", key: parsed.key, value: parsed.value, prompt };
   }
-  if (parsed.key === "renderer" && isRenderer(parsed.value)) {
-    return { type: "setPreference", key: parsed.key, value: parsed.value, prompt };
-  }
   if (parsed.key === "component" && isComponent(parsed.value)) {
     return { type: "setPreference", key: parsed.key, value: parsed.value, prompt };
   }
@@ -1657,10 +1654,6 @@ function isPresentation(value: string): value is WorldPreferences["presentation"
 
 function isTone(value: string): value is WorldPreferences["tone"] {
   return value === "calm" || value === "sharp";
-}
-
-function isRenderer(value: string): value is WorldPreferences["renderer"] {
-  return value === "dom" || value === "fabric" || value === "voice";
 }
 
 function isComponent(value: string): value is WorldPreferences["component"] {

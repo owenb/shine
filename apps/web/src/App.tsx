@@ -46,7 +46,7 @@ function SignalApp() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [componentStyle, setComponentStyle] = useState<CSSProperties | null>(null);
-  const [rendererOverride, setRendererOverride] = useState<RendererKind | null>(null);
+  const [rendererMode, setRendererMode] = useState<RendererKind>("dom");
   const [rendererFlash, setRendererFlash] = useState(false);
   const [backgroundByUser, setBackgroundByUser] = useState<Record<string, string>>(() => loadBackgroundPrefs());
   const stateCache = useRef(new Map<string, WorldState>());
@@ -111,7 +111,7 @@ function SignalApp() {
     );
   }, [state, timeline]);
   const live = state ? state.selectedTx === state.headTx : true;
-  const activeRenderer: RendererKind = rendererOverride ?? state?.preferences.renderer ?? "dom";
+  const activeRenderer: RendererKind = rendererMode;
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -120,25 +120,20 @@ function SignalApp() {
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       event.preventDefault();
       const order: RendererKind[] = ["dom", "fabric", "voice"];
-      setRendererOverride((prev) => {
-        const current = prev ?? state?.preferences.renderer ?? "dom";
+      setRendererMode((current) => {
         return order[(order.indexOf(current) + 1) % order.length];
       });
       setRendererFlash(true);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state?.preferences.renderer]);
+  }, []);
 
   useEffect(() => {
     if (!rendererFlash) return;
     const id = window.setTimeout(() => setRendererFlash(false), 1400);
     return () => window.clearTimeout(id);
-  }, [rendererFlash, rendererOverride]);
-
-  useEffect(() => {
-    setRendererOverride(null);
-  }, [state?.preferences.renderer, world]);
+  }, [rendererFlash]);
 
   useEffect(() => {
     for (const item of timeline) {
